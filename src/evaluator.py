@@ -18,6 +18,7 @@ import math
 import os
 import sys
 
+import yaml
 from dotenv import load_dotenv
 from tabulate import tabulate
 
@@ -35,7 +36,7 @@ from ragas.metrics import (
 )
 
 # -----------------------------------------------------------------------------
-# 0. Load env vars
+# 0. Load env vars + project config
 # -----------------------------------------------------------------------------
 
 _ENV_PATH = os.path.join(os.path.dirname(__file__), "..", ".env")
@@ -48,9 +49,15 @@ if not OPENAI_API_KEY:
         "Make sure it is set in the .env file at the project root."
     )
 
-# Judge model constants (same models as the RAG pipeline for consistency)
-_LLM_MODEL   = "gpt-4o"
-_EMBED_MODEL = "text-embedding-3-small"
+# Read judge_model and embedding_model from config.yaml so a single config
+# change updates both the pipeline and the evaluator.
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+with open(_CONFIG_PATH, "r") as _f:
+    _CONFIG = yaml.safe_load(_f)
+
+_EVAL_CFG    = _CONFIG["evaluation"]
+_JUDGE_MODEL = _EVAL_CFG["judge_model"]      # gpt-4o-mini  (cheaper judge)
+_EMBED_MODEL = _EVAL_CFG["embedding_model"]  # text-embedding-3-small
 
 # -----------------------------------------------------------------------------
 # 1. Lazy singleton — judge LLM + embeddings (initialised once per process)
@@ -69,12 +76,12 @@ def _ensure_judge():
 
     if _llm_judge is None:
         print("\n[Evaluator] Initialising RAGAS judge...")
-        print(f"            LLM        : {_LLM_MODEL}")
+        print(f"            LLM        : {_JUDGE_MODEL}")
         print(f"            Embeddings : {_EMBED_MODEL}")
 
         _llm_judge = LangchainLLMWrapper(
             ChatOpenAI(
-                model=_LLM_MODEL,
+                model=_JUDGE_MODEL,
                 temperature=0,
                 openai_api_key=OPENAI_API_KEY,
             )
@@ -297,15 +304,17 @@ if __name__ == "__main__":
     scored_results = evaluate_batch(rag_results)
 
     # ------------------------------------------------------------------
-    # Step 3: Print summary table
+    # Step 3: Print summary table + cost comparison
     # ------------------------------------------------------------------
     print("\n[Step 3/3] Results summary")
     print("=" * 62)
 
     table_rows = []
+    total_tokens = 0
     for r in scored_results:
         q_short = (r["question"][:42] + "...") if len(r["question"]) > 45 else r["question"]
         err = r["evaluation_error"]
+        total_tokens += r.get("token_usage", 0)
 
         table_rows.append([
             q_short,
@@ -320,6 +329,56 @@ if __name__ == "__main__":
     headers = ["Question", "Faithful", "Ans Relev", "Ctx Prec", "Latency", "Tokens", "Error"]
     print(tabulate(table_rows, headers=headers, tablefmt="grid"))
 
+    # Check quality thresholds
+    print("\n[Quality check]")
+    all_good = True
+    for r in scored_results:
+        f  = r.get("faithfulness")
+        ar = r.get("answer_relevancy")
+        if f is not None and f < 0.70:
+            print(f"  WARNING  faithfulness {f:.4f} < 0.70 for: {r['question'][:60]}")
+            all_good = False
+        if ar is not None and ar < 0.70:
+            print(f"  WARNING  answer_relevancy {ar:.4f} < 0.70 for: {r['question'][:60]}")
+            all_good = False
+    if all_good:
+        print("  All scores above 0.70 threshold. Judge model swap is safe.")
+
+    # ------------------------------------------------------------------
+    # Cost comparison: gpt-4o-mini judge vs gpt-4o judge
+    # ------------------------------------------------------------------
+    # Pricing (blended input+output approximations):
+    #   gpt-4o      : ~$5.00 / M tokens  = $0.000005  / token
+    #   gpt-4o-mini : ~$0.20 / M tokens  = $0.0000002 / token  (~25x cheaper)
+    COST_4O_PER_TOKEN   = 0.000005
+    COST_MINI_PER_TOKEN = 0.0000002
+
+    n_q         = len(scored_results)
+    cost_mini   = total_tokens * COST_MINI_PER_TOKEN
+    cost_4o     = total_tokens * COST_4O_PER_TOKEN
+    savings     = cost_4o - cost_mini
+    pct_saved   = (savings / cost_4o * 100) if cost_4o > 0 else 0
+
+    # Project to 10-question TEST_MODE and 100-question full run
+    cost_mini_10   = cost_mini   * (10  / n_q) if n_q else 0
+    cost_4o_10     = cost_4o     * (10  / n_q) if n_q else 0
+    cost_mini_100  = cost_mini   * (100 / n_q) if n_q else 0
+    cost_4o_100    = cost_4o     * (100 / n_q) if n_q else 0
+
+    print(f"\n{'=' * 62}")
+    print(f"  COST COMPARISON  ({n_q} questions, judge tokens only)")
+    print(f"  Judge model used : {_JUDGE_MODEL}")
+    print(f"{'=' * 62}")
+    print(f"  Total tokens used        : {total_tokens:,}")
+    print(f"  Cost (gpt-4o-mini judge) : ${cost_mini:.6f}  for {n_q} Qs")
+    print(f"  Cost (gpt-4o judge)      : ${cost_4o:.6f}  for {n_q} Qs")
+    print(f"  Savings this run         : ${savings:.6f}  ({pct_saved:.0f}% cheaper)")
+    print("-" * 62)
+    print(f"  Projected  10-Q TEST run : mini=${cost_mini_10:.4f}  vs  4o=${cost_4o_10:.4f}")
+    print(f"  Projected 100-Q FULL run : mini=${cost_mini_100:.4f}  vs  4o=${cost_4o_100:.4f}")
+    print(f"  Full-run savings         : ${(cost_4o_100 - cost_mini_100):.4f} per run")
+    print(f"{'=' * 62}")
+
     # Print full error detail if any
     errors = [(r["question"], r["evaluation_error"]) for r in scored_results if r["evaluation_error"]]
     if errors:
@@ -328,3 +387,4 @@ if __name__ == "__main__":
             print(f"  Q: {q}\n  E: {e}\n")
 
     print("\nEvaluation complete.")
+    sys.exit(0)   # explicit exit avoids ChromaDB/RAGAS C-extension segfault on Windows cleanup
