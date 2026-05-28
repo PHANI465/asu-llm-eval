@@ -62,6 +62,7 @@ _GOLDEN_DATASET_PATH = os.path.join(_PROJECT_ROOT, "data", "golden_dataset.json"
 _RESULTS_DIR         = os.path.join(_PROJECT_ROOT, "results")
 _DB_PATH             = os.path.join(_RESULTS_DIR, "eval_history.db")
 _REPORT_PATH         = os.path.join(_RESULTS_DIR, "latest_report.json")
+_HISTORY_PATH        = os.path.join(_RESULTS_DIR, "eval_history.json")
 
 # Cost per token: approximate GPT-4o blended rate ($5/M tokens, as specified)
 _COST_PER_TOKEN_USD  = 0.000005
@@ -350,21 +351,45 @@ def save_json_report(
     metrics: dict,
     gate_results: dict,
     scored_results: list,
+    total_cost_usd: float = 0.0,
+    total_tokens: int = 0,
 ) -> None:
     """
     Write a full-detail JSON report to results/latest_report.json.
-    This file is read by the Streamlit dashboard.
+    Includes all_results (every question scored), total_cost_usd,
+    and total_tokens for the React dashboard.
     """
     os.makedirs(_RESULTS_DIR, exist_ok=True)
 
-    # Collect up to 5 sample failures (faithfulness < 0.5)
+    # ── all_results — every question with its scores ──────────────────────────
+    # NOTE: evaluate_single() creates a fresh dict with only RAGAS score fields,
+    # so golden_id / category / difficulty are taken from dataset[i] directly.
+    all_results = []
+    for i, r in enumerate(scored_results):
+        item  = dataset[i] if i < len(dataset) else {}
+        faith = r.get("faithfulness")
+        all_results.append({
+            "id":                item.get("id"),
+            "question":          r.get("question", ""),
+            "answer":            (r.get("answer") or "")[:500],
+            "category":          item.get("category", ""),
+            "difficulty":        item.get("difficulty", ""),
+            "faithfulness":      faith,
+            "answer_relevancy":  r.get("answer_relevancy"),
+            "context_precision": r.get("context_precision"),
+            "latency_seconds":   r.get("latency_seconds"),
+            "token_usage":       r.get("token_usage"),
+            "passed":            faith is not None and faith >= 0.5,
+        })
+
+    # ── sample_failures — up to 5 low-faithfulness examples ──────────────────
     sample_failures = []
     for r in scored_results:
         f = r.get("faithfulness")
         if f is not None and f < 0.5:
             sample_failures.append({
                 "question":    r["question"],
-                "answer":      r["answer"][:300],   # truncate long answers
+                "answer":      (r.get("answer") or "")[:300],
                 "faithfulness": f,
                 "category":    r.get("category", ""),
                 "error":       r.get("evaluation_error"),
@@ -377,6 +402,8 @@ def save_json_report(
         "commit_id":       commit_id,
         "total_questions": len(dataset),
         "test_mode":       TEST_MODE,
+        "total_cost_usd":  total_cost_usd,
+        "total_tokens":    total_tokens,
         "metrics":         metrics,
         "gate_results": {
             "overall":      gate_results["overall"],
@@ -387,12 +414,76 @@ def save_json_report(
         "overall_result":  gate_results["overall"],
         "failed_gates":    gate_results["failed_gates"],
         "sample_failures": sample_failures,
+        "all_results":     all_results,
     }
 
     with open(_REPORT_PATH, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
-    print(f"  [OK] latest_report.json — saved to {_REPORT_PATH}")
+    print(f"  [OK] latest_report.json — {len(all_results)} results saved to {_REPORT_PATH}")
+
+
+# =============================================================================
+# Save results — History JSON
+# =============================================================================
+
+def save_history_json(
+    run_timestamp: str,
+    commit_id: str,
+    dataset: list,
+    metrics: dict,
+    gate_results: dict,
+    total_cost_usd: float = 0.0,
+    total_tokens: int = 0,
+) -> None:
+    """
+    Append a summary row to results/eval_history.json.
+    Creates the file on first run.  Keeps the most recent 50 runs.
+    """
+    os.makedirs(_RESULTS_DIR, exist_ok=True)
+
+    # Load existing history or start fresh
+    if os.path.exists(_HISTORY_PATH):
+        try:
+            with open(_HISTORY_PATH, "r", encoding="utf-8") as f:
+                history = json.load(f)
+            if not isinstance(history.get("runs"), list):
+                history = {"runs": []}
+        except Exception as exc:
+            print(f"  [WARNING] Could not read eval_history.json: {exc} — starting fresh.")
+            history = {"runs": []}
+    else:
+        history = {"runs": []}
+
+    # Build new run row
+    new_run = {
+        "run_timestamp":       run_timestamp,
+        "commit_id":           commit_id,
+        "total_questions":     len(dataset),
+        "test_mode":           TEST_MODE,
+        "hallucination_rate":  metrics.get("hallucination_rate"),
+        "answer_relevancy":    metrics.get("answer_relevancy"),
+        "faithfulness":        metrics.get("faithfulness"),
+        "context_precision":   metrics.get("context_precision"),
+        "latency_p95_seconds": metrics.get("latency_p95_seconds"),
+        "cost_per_query_usd":  metrics.get("cost_per_query_usd"),
+        "total_cost_usd":      total_cost_usd,
+        "total_tokens":        total_tokens,
+        "overall_result":      gate_results["overall"],
+        "failed_gates":        gate_results.get("failed_gates", []),
+    }
+
+    history["runs"].append(new_run)
+
+    # Keep only the most recent 50 runs
+    if len(history["runs"]) > 50:
+        history["runs"] = history["runs"][-50:]
+
+    with open(_HISTORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2)
+
+    n = len(history["runs"])
+    print(f"  [OK] eval_history.json — {n} run(s) total -> {_HISTORY_PATH}")
 
 
 # =============================================================================
@@ -507,6 +598,11 @@ def main() -> int:
 
     # ── Save results ──────────────────────────────────────────────────────────
     print("\n[Saving results...]")
+
+    # Compute run-level totals for report and history
+    _run_total_tokens   = sum(r.get("token_usage", 0) or 0 for r in scored_results)
+    _run_total_cost_usd = round(_run_total_tokens * _COST_PER_TOKEN_USD, 6)
+
     try:
         save_to_database(run_timestamp, commit_id, dataset, metrics, gate_results)
     except Exception as exc:
@@ -515,13 +611,26 @@ def main() -> int:
     try:
         save_json_report(
             run_timestamp, commit_id, dataset,
-            metrics, gate_results, scored_results
+            metrics, gate_results, scored_results,
+            total_cost_usd=_run_total_cost_usd,
+            total_tokens=_run_total_tokens,
         )
     except Exception as exc:
         print(f"  [WARNING] Could not save JSON report: {exc}")
 
+    try:
+        save_history_json(
+            run_timestamp, commit_id, dataset,
+            metrics, gate_results,
+            total_cost_usd=_run_total_cost_usd,
+            total_tokens=_run_total_tokens,
+        )
+    except Exception as exc:
+        print(f"  [WARNING] Could not save history JSON: {exc}")
+
     # ── Final summary ─────────────────────────────────────────────────────────
     total_elapsed = time.perf_counter() - run_start
+    print(f"\n  Total cost   : ${_run_total_cost_usd:.4f}  |  Total tokens: {_run_total_tokens:,}")
     print_final_summary(dataset, total_elapsed, commit_id, metrics, gate_results)
 
     return 0 if gate_results["overall"] == "PASS" else 1
@@ -558,6 +667,8 @@ if __name__ == "__main__":
                 "commit_id":       _get_commit_id(),
                 "total_questions": 0,
                 "test_mode":       TEST_MODE,
+                "total_cost_usd":  0.0,
+                "total_tokens":    0,
                 "overall_result":  "ERROR",
                 "failed_gates":    [],
                 "metrics":         {},
@@ -568,6 +679,7 @@ if __name__ == "__main__":
                     "gates":        {},
                 },
                 "sample_failures": [],
+                "all_results":     [],
                 "pipeline_error":  _err_str,
                 "traceback":       _tb_str,
             }
