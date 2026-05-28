@@ -1,0 +1,9 @@
+[theme]
+# Light is used as the base so all Streamlit widgets render with dark text.
+# The dashboard's CSS injection layer handles the full dark-mode override.
+base                    = "light"
+primaryColor            = "#8C1D40"
+backgroundColor         = "#F0F3FA"
+secondaryBackgroundColor = "#FFFFFF"
+textColor               = "#1A1D2E"
+font                    = "sans serif"

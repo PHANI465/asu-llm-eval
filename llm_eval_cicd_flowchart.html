@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #0f1117;
+    color: #fff;
+    padding: 24px 16px;
+    min-height: 100vh;
+  }
+  h1 { text-align: center; font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+  .subtitle { text-align: center; font-size: 12px; color: #888; margin-bottom: 28px; }
+  .flow { display: flex; flex-direction: column; align-items: center; max-width: 720px; margin: 0 auto; }
+  .phase-label { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; padding: 3px 14px; border-radius: 20px; margin-bottom: 10px; margin-top: 6px; }
+  .box { width: 100%; border-radius: 12px; padding: 14px 20px; display: flex; align-items: flex-start; gap: 14px; margin-bottom: 0; }
+  .box-icon { font-size: 22px; flex-shrink: 0; margin-top: 2px; }
+  .box-title { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+  .box-desc { font-size: 12px; line-height: 1.55; opacity: 0.82; }
+  .box-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tag { font-size: 10px; font-weight: 600; padding: 2px 9px; border-radius: 20px; }
+  .arrow { display: flex; flex-direction: column; align-items: center; margin: 4px 0; }
+  .arrow-line { width: 2px; height: 22px; background: #444; }
+  .arrow-head { width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-top: 10px solid #444; }
+  .arrow-label { font-size: 10px; color: #666; margin-top: 2px; font-style: italic; }
+  .divider { width: 100%; height: 1px; background: #222; margin: 18px 0 14px 0; }
+  .diamond-wrap { display: flex; flex-direction: column; align-items: center; width: 100%; margin: 6px 0; }
+  .diamond { width: 220px; height: 80px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #d8b4fe; text-align: center; padding: 0 24px; background: #2a1a3a; border: 2px solid #a855f7; clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); }
+  .branch-row { display: flex; width: 100%; gap: 16px; align-items: flex-start; }
+  .branch-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .branch-label-tag { font-size: 11px; font-weight: 700; padding: 3px 12px; border-radius: 20px; }
+  .pass-tag { background: #16a34a; color: #dcfce7; }
+  .fail-tag { background: #dc2626; color: #fee2e2; }
+
+  /* COLOR THEMES */
+  .blue { background: #1a2a4a; border: 1.5px solid #2d5be3; }
+  .blue .box-title { color: #6b9fff; }
+  .blue .tag { background: #2d5be3; color: #c8d8ff; }
+  .blue-label { background: #1a2a4a; color: #6b9fff; border: 1px solid #2d5be3; }
+
+  .purple { background: #1e1a3a; border: 1.5px solid #7c3aed; }
+  .purple .box-title { color: #c084fc; }
+  .purple .tag { background: #7c3aed; color: #ede9fe; }
+  .purple-label { background: #1e1a3a; color: #c084fc; border: 1px solid #7c3aed; }
+
+  .teal { background: #0d2a2a; border: 1.5px solid #0d9488; }
+  .teal .box-title { color: #2dd4bf; }
+  .teal .tag { background: #0d9488; color: #ccfbf1; }
+  .teal-label { background: #0d2a2a; color: #2dd4bf; border: 1px solid #0d9488; }
+
+  .orange { background: #2a1a0a; border: 1.5px solid #ea580c; }
+  .orange .box-title { color: #fb923c; }
+  .orange .tag { background: #ea580c; color: #ffedd5; }
+  .orange-label { background: #2a1a0a; color: #fb923c; border: 1px solid #ea580c; }
+
+  .green { background: #0a2a15; border: 1.5px solid #16a34a; }
+  .green .box-title { color: #4ade80; }
+  .green .tag { background: #16a34a; color: #dcfce7; }
+
+  .red { background: #2a0a0a; border: 1.5px solid #dc2626; }
+  .red .box-title { color: #f87171; }
+  .red .tag { background: #dc2626; color: #fee2e2; }
+
+  .yellow { background: #2a200a; border: 1.5px solid #ca8a04; }
+  .yellow .box-title { color: #fbbf24; }
+  .yellow .tag { background: #ca8a04; color: #fef9c3; }
+  .yellow-label { background: #2a200a; color: #fbbf24; border: 1px solid #ca8a04; }
+</style>
+</head>
+<body>
+<h1>🔁 LLM Eval CI/CD Pipeline — Complete Flow</h1>
+<div class="subtitle">What happens from a code change to production deployment</div>
+
+<div class="flow">
+
+  <!-- PHASE 1 -->
+  <div class="phase-label blue-label">① SETUP PHASE — Done Once</div>
+
+  <div class="box blue">
+    <div class="box-icon">📋</div>
+    <div class="box-content">
+      <div class="box-title">Build the Golden Dataset</div>
+      <div class="box-desc">Create a JSON/CSV file with 100+ test questions, expected answers, source documents, and edge cases. This is your permanent test suite — your ground truth.</div>
+      <div class="box-tags">
+        <span class="tag">100+ Q&A pairs</span>
+        <span class="tag">Expected answers</span>
+        <span class="tag">Edge cases</span>
+        <span class="tag">Stored in GitHub</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+  <div class="box blue">
+    <div class="box-icon">🤖</div>
+    <div class="box-content">
+      <div class="box-title">Build the LLM / RAG Pipeline</div>
+      <div class="box-desc">Your actual AI system — LLM + vector database + retrieval logic + system prompt. This is the thing you are testing and evaluating.</div>
+      <div class="box-tags">
+        <span class="tag">LangChain</span>
+        <span class="tag">ChromaDB / Pinecone</span>
+        <span class="tag">OpenAI / Anthropic API</span>
+        <span class="tag">System Prompt</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+  <div class="box blue">
+    <div class="box-icon">⚙️</div>
+    <div class="box-content">
+      <div class="box-title">Configure GitHub Actions (CI/CD Trigger)</div>
+      <div class="box-desc">Write a YAML file in your repo that tells GitHub: "Every time someone pushes code, automatically run the evaluation pipeline."</div>
+      <div class="box-tags">
+        <span class="tag">.github/workflows/eval.yml</span>
+        <span class="tag">Triggers on git push</span>
+        <span class="tag">Runs in cloud automatically</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- PHASE 2 -->
+  <div class="phase-label purple-label">② TRIGGER PHASE — Every Time Something Changes</div>
+
+  <div class="box purple">
+    <div class="box-icon">✏️</div>
+    <div class="box-content">
+      <div class="box-title">Developer Makes a Change</div>
+      <div class="box-desc">Could be any of: editing the system prompt, swapping the model, updating the RAG knowledge base, or changing retrieval logic.</div>
+      <div class="box-tags">
+        <span class="tag">Prompt change</span>
+        <span class="tag">Model swap</span>
+        <span class="tag">RAG DB update</span>
+        <span class="tag">Retrieval logic edit</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div><div class="arrow-label">git push</div></div>
+
+  <div class="box purple">
+    <div class="box-icon">🚀</div>
+    <div class="box-content">
+      <div class="box-title">GitHub Actions Automatically Fires</div>
+      <div class="box-desc">No manual action needed. GitHub detects the push and immediately spins up the evaluation pipeline in the cloud.</div>
+      <div class="box-tags">
+        <span class="tag">Automatic</span>
+        <span class="tag">No human needed</span>
+        <span class="tag">Runs in seconds</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- PHASE 3 -->
+  <div class="phase-label teal-label">③ EVALUATION PHASE — The Core Engine</div>
+
+  <div class="box teal">
+    <div class="box-icon">📂</div>
+    <div class="box-content">
+      <div class="box-title">Load Golden Dataset</div>
+      <div class="box-desc">Pipeline reads all 100+ test questions from the golden dataset JSON file stored in the repo.</div>
+      <div class="box-tags">
+        <span class="tag">Read test_cases.json</span>
+        <span class="tag">Load expected answers</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+  <div class="box teal">
+    <div class="box-icon">🔁</div>
+    <div class="box-content">
+      <div class="box-title">Run All Questions Through the LLM Pipeline</div>
+      <div class="box-desc">Each of the 100+ questions is sent through your actual LLM/RAG system. Records actual answers, retrieved documents, and latency for each.</div>
+      <div class="box-tags">
+        <span class="tag">Query LLM for each question</span>
+        <span class="tag">Record actual answers</span>
+        <span class="tag">Track latency per call</span>
+        <span class="tag">Track token cost</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+  <div class="box teal">
+    <div class="box-icon">🔬</div>
+    <div class="box-content">
+      <div class="box-title">Score Every Answer with RAGAS / DeepEval</div>
+      <div class="box-desc">The evaluation library scores each answer across multiple dimensions using LLM-as-judge and semantic similarity.</div>
+      <div class="box-tags">
+        <span class="tag">Hallucination Rate</span>
+        <span class="tag">Answer Relevance</span>
+        <span class="tag">Faithfulness to Sources</span>
+        <span class="tag">Context Precision</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+  <div class="box teal">
+    <div class="box-icon">📊</div>
+    <div class="box-content">
+      <div class="box-title">Compute Aggregate Metrics</div>
+      <div class="box-desc">Calculate final numbers across all 100+ test cases: average scores, percentile latency, total cost.</div>
+      <div class="box-tags">
+        <span class="tag">Hallucination: 3.2%</span>
+        <span class="tag">Relevance: 0.81</span>
+        <span class="tag">p95 Latency: 2.1s</span>
+        <span class="tag">Cost: $0.014/query</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- PHASE 4 -->
+  <div class="phase-label orange-label">④ QUALITY GATE PHASE — Pass or Fail</div>
+
+  <div class="box orange">
+    <div class="box-icon">🎯</div>
+    <div class="box-content">
+      <div class="box-title">Compare Against Thresholds</div>
+      <div class="box-desc">Each metric is checked against pre-defined quality gates in your config file.</div>
+      <div class="box-tags">
+        <span class="tag">Hallucination &lt; 5%</span>
+        <span class="tag">Relevance &gt; 0.75</span>
+        <span class="tag">p95 Latency &lt; 3s</span>
+        <span class="tag">Cost &lt; $0.02</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+  <div class="diamond-wrap">
+    <div class="diamond">All Quality Gates Pass?</div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div></div>
+
+  <div class="branch-row">
+    <div class="branch-col">
+      <span class="branch-label-tag pass-tag">✅ YES — ALL PASS</span>
+      <div class="box green" style="width:100%">
+        <div class="box-icon">🟢</div>
+        <div class="box-content">
+          <div class="box-title">Deployment Approved</div>
+          <div class="box-desc">GitHub marks the check as passed. The pull request can be merged. Change goes to production safely.</div>
+          <div class="box-tags">
+            <span class="tag">PR approved</span>
+            <span class="tag">Merge allowed</span>
+            <span class="tag">Deploy to prod</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="branch-col">
+      <span class="branch-label-tag fail-tag">❌ NO — GATE FAILED</span>
+      <div class="box red" style="width:100%">
+        <div class="box-icon">🔴</div>
+        <div class="box-content">
+          <div class="box-title">Deployment Blocked</div>
+          <div class="box-desc">GitHub blocks the merge automatically. Developer gets a detailed failure report showing exactly which metric failed and by how much.</div>
+          <div class="box-tags">
+            <span class="tag">PR blocked</span>
+            <span class="tag">Merge prevented</span>
+            <span class="tag">Alert sent</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- PHASE 5 -->
+  <div class="phase-label yellow-label">⑤ MONITORING PHASE — Always Running</div>
+
+  <div class="box yellow">
+    <div class="box-icon">💾</div>
+    <div class="box-content">
+      <div class="box-title">Save Results to Database</div>
+      <div class="box-desc">Every evaluation run — pass or fail — is stored with a timestamp, commit ID, and all metric scores. This builds your history over time.</div>
+      <div class="box-tags">
+        <span class="tag">SQLite / Supabase</span>
+        <span class="tag">Timestamp + Commit ID</span>
+        <span class="tag">All metric scores saved</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+  <div class="box yellow">
+    <div class="box-icon">📈</div>
+    <div class="box-content">
+      <div class="box-title">Dashboard — Track Trends Over Time</div>
+      <div class="box-desc">A visual dashboard shows how your AI system quality evolves across every change ever made. Compare prompt versions, model versions, and spot regressions instantly.</div>
+      <div class="box-tags">
+        <span class="tag">Streamlit / React</span>
+        <span class="tag">Metric trends</span>
+        <span class="tag">Best prompt version</span>
+        <span class="tag">Cost history</span>
+        <span class="tag">Regression alerts</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

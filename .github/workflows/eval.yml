@@ -1,0 +1,149 @@
+# =============================================================================
+# .github/workflows/eval.yml
+# ASU LLM Evaluation — CI/CD Quality Gate Workflow
+#
+# Triggers on every push to main/master and on pull requests targeting main.
+# Runs the full RAGAS evaluation pipeline and PASSES or FAILS the CI check
+# based on whether all quality gates are satisfied.
+#
+# Required repository secret:
+#   OPENAI_API_KEY  — set at Settings > Secrets and variables > Actions
+#
+# Artifacts:
+#   latest_report.json is uploaded so you can download it from the Actions UI.
+# =============================================================================
+
+name: LLM Evaluation Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+  # Allow manual runs from the Actions tab with an optional full-run toggle
+  workflow_dispatch:
+    inputs:
+      full_run:
+        description: "Run full 100-question evaluation instead of TEST_MODE (10 Qs)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+# Cancel any in-progress run for the same branch so pushes don't queue
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    name: RAGAS Quality Gates
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ───────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"                   # caches pip wheel download across runs
+
+      # ── 3. Install dependencies ───────────────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Write .env from secrets ────────────────────────────────────────
+      #    python-dotenv reads .env at startup; we write it here so the key
+      #    never appears in requirements or source code.
+      - name: Create .env file
+        run: |
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+
+      # ── 5. Ensure results/ directory exists ───────────────────────────────
+      - name: Create results directory
+        run: mkdir -p results
+
+      # ── 6. (Optional) Override TEST_MODE for manual full runs ─────────────
+      #    When workflow_dispatch input full_run == "true" we patch the flag
+      #    in run_eval.py before executing so production runs are possible
+      #    without committing a code change.
+      - name: Enable full run mode (manual dispatch only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_run == 'true' }}
+        run: |
+          sed -i 's/^TEST_MODE = True/TEST_MODE = False/' src/run_eval.py
+          echo "TEST_MODE set to False — running full 100-question evaluation."
+
+      # ── 7. Run evaluation ─────────────────────────────────────────────────
+      #    Exit code 0 = PASS (all gates green)
+      #    Exit code 1 = FAIL (one or more gates red) → CI check fails
+      - name: Run LLM evaluation pipeline
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PYTHONUNBUFFERED: "1"           # flush print() output in real time
+        run: python src/run_eval.py
+
+      # ── 8. Upload evaluation report as artifact ───────────────────────────
+      #    Always runs so you can inspect the report even when the job fails.
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-report-${{ github.run_number }}
+          path: results/latest_report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ── 9. Print gate summary to the Actions log ──────────────────────────
+      #    Echoes the key numbers from the JSON so you can skim the result
+      #    without downloading the artifact.
+      - name: Print gate summary
+        if: always()
+        run: |
+          if [ -f results/latest_report.json ]; then
+            echo "============================================"
+            echo "EVALUATION SUMMARY"
+            echo "============================================"
+            python - <<'EOF'
+          import json, sys
+
+          with open("results/latest_report.json") as f:
+              r = json.load(f)
+
+          m = r.get("metrics", {})
+          g = r.get("gate_results", {}).get("gates", {})
+
+          print(f"  Questions evaluated : {r.get('total_questions')} "
+                f"({'TEST MODE' if r.get('test_mode') else 'FULL RUN'})")
+          print(f"  Commit              : {r.get('commit_id')}")
+          print()
+          print(f"  Hallucination Rate  : {m.get('hallucination_rate', 'N/A')}")
+          print(f"  Answer Relevancy    : {m.get('answer_relevancy', 'N/A')}")
+          print(f"  Faithfulness        : {m.get('faithfulness', 'N/A')}")
+          print(f"  Context Precision   : {m.get('context_precision', 'N/A')}")
+          print(f"  Latency P95         : {m.get('latency_p95_seconds', 'N/A')}s")
+          print(f"  Cost Per Query      : ${m.get('cost_per_query_usd', 0):.4f}")
+          print()
+
+          overall = r.get("overall_result", "UNKNOWN")
+          failed  = r.get("failed_gates", [])
+          print(f"  OVERALL RESULT      : {overall}")
+          if failed:
+              print(f"  FAILED GATES        : {', '.join(failed)}")
+          else:
+              print("  All gates passed.")
+          print("============================================")
+          EOF
+          else
+            echo "No report file found — evaluation may have errored before saving."
+          fi
