@@ -13,3 +13,4 @@ evaluation:
   chunk_size: 1000
   chunk_overlap: 150
   top_k_retrieval: 8               # Raised from 5 — retrieves more chunks to reduce hallucination
+  pinecone_index: asullmeval       # Pinecone cloud vector store index name

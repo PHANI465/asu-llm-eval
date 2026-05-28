@@ -52,21 +52,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # ── 2. Validate required secret ───────────────────────────────────────
-      #    Fail early with a clear message instead of a cryptic API error
-      #    if the OPENAI_API_KEY secret has not been added to the repository.
-      - name: Check OPENAI_API_KEY secret
+      # ── 2. Validate required secrets ──────────────────────────────────────
+      #    Fail early with a clear message if either API key secret is missing.
+      - name: Check required secrets
         run: |
+          MISSING=0
           if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
             echo "ERROR: OPENAI_API_KEY secret is not configured."
+            MISSING=1
+          else
+            echo "OPENAI_API_KEY    : configured."
+          fi
+          if [ -z "${{ secrets.PINECONE_API_KEY }}" ]; then
+            echo "ERROR: PINECONE_API_KEY secret is not configured."
+            MISSING=1
+          else
+            echo "PINECONE_API_KEY  : configured."
+          fi
+          if [ "$MISSING" -eq 1 ]; then
             echo ""
-            echo "Please add it at:"
-            echo "  GitHub repo → Settings → Secrets and variables → Actions"
-            echo "  Name:  OPENAI_API_KEY"
-            echo "  Value: sk-..."
+            echo "Add missing secrets at:"
+            echo "  GitHub repo -> Settings -> Secrets and variables -> Actions"
             exit 1
           fi
-          echo "OPENAI_API_KEY is configured."
 
       # ── 3. Python setup ───────────────────────────────────────────────────
       - name: Set up Python 3.11
@@ -81,7 +89,9 @@ jobs:
 
       # ── 5. Write .env from secrets ────────────────────────────────────────
       - name: Create .env file
-        run: echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+        run: |
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+          echo "PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}" >> .env
 
       # ── 6. Ensure results/ directory exists ───────────────────────────────
       - name: Create results directory
