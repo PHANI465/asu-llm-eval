@@ -8,6 +8,8 @@ results/*.db
 *.egg-info/
 dist/
 build/
+dashboard-react/node_modules/
+dashboard-react/dist/
 .pytest_cache/
 .venv/
 venv/
