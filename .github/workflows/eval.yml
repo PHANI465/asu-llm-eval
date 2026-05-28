@@ -47,6 +47,11 @@ jobs:
     name: RAGAS Quality Gates
     runs-on: ubuntu-latest
 
+    # contents: write is required for the final "Commit evaluation results" step
+    # to push latest_report.json back to the repository using GITHUB_TOKEN.
+    permissions:
+      contents: write
+
     steps:
       # ── 1. Checkout ───────────────────────────────────────────────────────
       - name: Checkout repository
@@ -184,3 +189,20 @@ jobs:
             echo "The pipeline crashed before the crash-handler could write a report."
             echo "Check the 'Run LLM evaluation pipeline' step log above for details."
           fi
+
+      # ── 11. Commit evaluation results back to the repo ────────────────────
+      #    Saves latest_report.json into the repo on every run (pass or fail).
+      #    [skip ci] in the commit message prevents an infinite CI trigger loop.
+      #    GITHUB_TOKEN is injected automatically — no secret setup needed.
+      #    git diff --staged --quiet exits 0 when nothing changed (no new run),
+      #    so the commit only happens when the file was actually updated.
+      - name: Commit evaluation results
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add results/latest_report.json
+          git diff --staged --quiet || git commit -m "ci: update evaluation results [skip ci]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
