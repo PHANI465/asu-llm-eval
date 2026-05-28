@@ -448,6 +448,9 @@ def main() -> int:
     """
     # Pipeline module imports are here (not at file top) so that any import-time
     # error (missing API key, bad dep) is caught by the __main__ crash handler.
+    # global declarations make the names visible to all helper functions in this
+    # module (run_rag_pipeline, run_evaluation, build_metrics, etc.).
+    global rag_pipeline, evaluator, quality_gates
     import rag_pipeline
     import evaluator
     import quality_gates
