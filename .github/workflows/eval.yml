@@ -70,7 +70,7 @@ jobs:
 
       # ── 3. Python setup ───────────────────────────────────────────────────
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -127,27 +127,50 @@ jobs:
           with open("results/latest_report.json") as f:
               r = json.load(f)
           m = r.get("metrics", {})
-          print(f"  Questions : {r.get('total_questions')} ({'TEST MODE' if r.get('test_mode') else 'FULL RUN'})")
-          print(f"  Commit    : {r.get('commit_id')}")
-          print(f"  Judge     : gpt-4o-mini")
-          print()
-          print(f"  Hallucination Rate  : {m.get('hallucination_rate', 'N/A')}")
-          print(f"  Answer Relevancy    : {m.get('answer_relevancy', 'N/A')}")
-          print(f"  Faithfulness        : {m.get('faithfulness', 'N/A')}")
-          print(f"  Context Precision   : {m.get('context_precision', 'N/A')}")
-          print(f"  Latency P95         : {m.get('latency_p95_seconds', 'N/A')}s")
-          print(f"  Cost Per Query      : ${m.get('cost_per_query_usd', 0):.4f}")
-          print()
           overall = r.get("overall_result", "UNKNOWN")
-          failed  = r.get("failed_gates", [])
-          print(f"  OVERALL: {overall}")
-          if failed:
-              print(f"  FAILED : {', '.join(failed)}")
+
+          # ── Pipeline crash report ──────────────────────────────────
+          if overall == "ERROR":
+              print("  STATUS  : PIPELINE CRASHED (evaluation did not complete)")
+              print(f"  Commit  : {r.get('commit_id')}")
+              print()
+              err = r.get("pipeline_error", "unknown error")
+              print(f"  ERROR   : {err}")
+              print()
+              tb = r.get("traceback", "")
+              if tb:
+                  print("  TRACEBACK:")
+                  for line in tb.splitlines():
+                      print(f"    {line}")
+              print("============================================")
+              print()
+              print("  HINT: Is OPENAI_API_KEY set in repo Secrets?")
+              print("        Settings > Secrets and variables > Actions")
+              print("============================================")
+
+          # ── Normal gate report ─────────────────────────────────────
           else:
-              print("  All gates passed.")
-          print("============================================")
+              print(f"  Questions : {r.get('total_questions')} ({'TEST MODE' if r.get('test_mode') else 'FULL RUN'})")
+              print(f"  Commit    : {r.get('commit_id')}")
+              print(f"  Judge     : gpt-4o-mini")
+              print()
+              print(f"  Hallucination Rate  : {m.get('hallucination_rate', 'N/A')}")
+              print(f"  Answer Relevancy    : {m.get('answer_relevancy', 'N/A')}")
+              print(f"  Faithfulness        : {m.get('faithfulness', 'N/A')}")
+              print(f"  Context Precision   : {m.get('context_precision', 'N/A')}")
+              print(f"  Latency P95         : {m.get('latency_p95_seconds', 'N/A')}s")
+              print(f"  Cost Per Query      : ${m.get('cost_per_query_usd', 0):.4f}")
+              print()
+              failed = r.get("failed_gates", [])
+              print(f"  OVERALL: {overall}")
+              if failed:
+                  print(f"  FAILED : {', '.join(failed)}")
+              else:
+                  print("  All gates passed.")
+              print("============================================")
           EOF
           else
-            echo "No report file — evaluation errored before saving results."
-            echo "Most likely cause: OPENAI_API_KEY secret not set in repository."
+            echo "No report file found."
+            echo "The pipeline crashed before the crash-handler could write a report."
+            echo "Check the 'Run LLM evaluation pipeline' step log above for details."
           fi
