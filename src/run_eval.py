@@ -579,4 +579,13 @@ if __name__ == "__main__":
 
         exit_code = 1
 
-    sys.exit(exit_code)
+    # os._exit() hard-exits without running Python's cleanup phase.
+    # sys.exit() raises SystemExit, which triggers destructor calls on
+    # C-extension objects (RAGAS, Pinecone gRPC, aiohttp) and can segfault
+    # on Windows during shutdown — producing exit code 139 even when the
+    # evaluation fully succeeded (exit_code=0). os._exit() bypasses all of
+    # that and delivers the correct exit code directly to the OS.
+    # Flush stdout/stderr first — os._exit() skips Python's normal I/O teardown.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)
