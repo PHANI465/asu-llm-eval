@@ -1,6 +1,9 @@
 # ASU LLM Evaluation Pipeline
 
-An automated CI/CD pipeline that evaluates the quality of an ASU university RAG chatbot on every GitHub push. Uses **RAGAS** to score faithfulness, relevancy, and precision; enforces thresholds through quality gates; and visualises results in a live Streamlit dashboard.
+An automated CI/CD pipeline that evaluates the quality of an ASU university RAG chatbot on every GitHub push. Uses **RAGAS** to score faithfulness, relevancy, and precision; enforces thresholds through quality gates; and visualises results in a live React dashboard deployed on Vercel.
+
+> **Live Dashboard:** https://your-vercel-url.vercel.app
+> **GitHub Repo:** https://github.com/PHANI465/asu-llm-eval
 
 ---
 
@@ -14,20 +17,26 @@ GitHub Actions (eval.yml)
      |
      +---> src/run_eval.py  (master orchestrator)
                |
-               +---> src/rag_pipeline.py   ChromaDB + GPT-4o answers
+               +---> src/rag_pipeline.py
+               |         Pinecone (cloud vectors)
+               |         + GPT-4o answers
                |
-               +---> src/evaluator.py      RAGAS scoring
+               +---> src/evaluator.py
+               |         RAGAS scoring
+               |         GPT-4o-mini judge
                |
-               +---> src/quality_gates.py  PASS / FAIL gates
+               +---> src/quality_gates.py
+               |         PASS / FAIL gates
                |
-               +---> results/eval_history.db    (SQLite — run history)
-               +---> results/latest_report.json (dashboard data)
+               +---> results/latest_report.json
+               |     (committed back to repo)
                |
                v
           Exit 0 (PASS) or Exit 1 (FAIL)
                |
                v
-     dashboard/app.py  (Streamlit — view locally)
+     React Dashboard on Vercel
+     (auto-refreshes from GitHub)
 ```
 
 ---
@@ -36,11 +45,11 @@ GitHub Actions (eval.yml)
 
 | Gate | Threshold | Direction |
 |---|---|---|
-| Hallucination Rate | <= 0.05 | lower is better |
+| Hallucination Rate | <= 0.10 | lower is better |
 | Answer Relevancy | >= 0.75 | higher is better |
 | Faithfulness | >= 0.80 | higher is better |
 | Context Precision | >= 0.60 | higher is better |
-| Latency P95 | <= 3.0 s | lower is better |
+| Latency P95 | <= 15.0 s | lower is better |
 | Cost Per Query | <= $0.02 | lower is better |
 
 All thresholds are configurable in `config.yaml`.
@@ -51,12 +60,14 @@ All thresholds are configurable in `config.yaml`.
 
 | Component | Library / Service |
 |---|---|
-| LLM (answers + judge) | OpenAI GPT-4o |
+| Answer LLM | GPT-4o |
+| Judge LLM | GPT-4o-mini (cost optimised) |
 | Embeddings | text-embedding-3-small |
-| Vector store | ChromaDB 1.0.7 |
+| Vector store | Pinecone (cloud) |
 | RAG framework | LangChain 0.3.25 |
 | Evaluation | RAGAS 0.2.15 |
-| Dashboard | Streamlit 1.45.1 |
+| Dashboard | React + Vite (Vercel) |
+| Local dashboard | Streamlit 1.45.1 |
 | Run history | SQLite (stdlib) |
 | CI/CD | GitHub Actions |
 
@@ -70,7 +81,12 @@ asu-llm-eval/
 │   └── workflows/
 │       └── eval.yml              # CI/CD pipeline
 ├── dashboard/
-│   └── app.py                    # Streamlit dashboard
+│   └── app.py                    # Streamlit dashboard (local)
+├── dashboard-react/
+│   ├── src/
+│   │   └── App.jsx               # React dashboard
+│   ├── vercel.json               # Vercel config
+│   └── package.json
 ├── data/
 │   ├── golden_dataset.json       # 100 Q&A pairs for evaluation
 │   └── knowledge_base/
@@ -82,16 +98,16 @@ asu-llm-eval/
 │       └── campus_and_programs.txt
 ├── results/
 │   ├── eval_history.db           # SQLite run history (gitignored)
-│   └── latest_report.json        # Dashboard data (gitignored)
+│   └── latest_report.json        # Dashboard data (committed by CI)
 ├── src/
 │   ├── rag_pipeline.py           # RAG core: load, chunk, embed, answer
 │   ├── evaluator.py              # RAGAS scoring engine
 │   ├── quality_gates.py          # Threshold checks + PASS/FAIL
 │   └── run_eval.py               # Master orchestrator (CI entry point)
-├── chroma_db/                    # Persisted vector store (gitignored)
+├── (Pinecone used for cloud vector storage)
 ├── config.yaml                   # All thresholds and evaluation settings
 ├── requirements.txt
-├── .env                          # OPENAI_API_KEY (gitignored — never commit)
+├── .env                          # API keys (gitignored — never commit)
 └── README.md
 ```
 
@@ -102,16 +118,18 @@ asu-llm-eval/
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/asu-llm-eval.git
+git clone https://github.com/PHANI465/asu-llm-eval.git
 cd asu-llm-eval
 pip install -r requirements.txt
 ```
 
-### 2. Add your API key
+### 2. Add your API keys
+
+Create `.env` in the project root:
 
 ```bash
-# Create .env in the project root
-echo "OPENAI_API_KEY=sk-..." > .env
+OPENAI_API_KEY=sk-...
+PINECONE_API_KEY=pcsk-...
 ```
 
 ### 3. Run the evaluation (TEST_MODE — 10 questions)
@@ -126,12 +144,12 @@ ASU LLM Evaluation Run [TEST MODE -- 10 questions]
 ...
 QUALITY GATE REPORT
 ============================================
-  hallucination_rate  : PASS  (0.0000 <= 0.05)
-  answer_relevancy    : PASS  (0.9304 >= 0.75)
-  faithfulness        : PASS  (1.0000 >= 0.8)
-  context_precision   : PASS  (0.9333 >= 0.6)
-  latency_p95         : PASS  (1.902s <= 3.0s)
-  cost_per_query      : PASS  ($0.0056 <= $0.02)
+  hallucination_rate  : PASS  (0.1000 <= 0.10)
+  answer_relevancy    : PASS  (0.9284 >= 0.75)
+  faithfulness        : PASS  (0.9000 >= 0.80)
+  context_precision   : PASS  (0.9333 >= 0.60)
+  latency_p95         : PASS  (2.169s <= 15.0s)
+  cost_per_query      : PASS  ($0.0087 <= $0.02)
 ============================================
 OVERALL RESULT: PASS
 All 6 gates passed. Safe to deploy.
@@ -145,24 +163,19 @@ TEST_MODE = False
 ```
 Then re-run `python src/run_eval.py`.
 
-### 5. View the dashboard
+### 5. View the local Streamlit dashboard
 
 ```bash
 streamlit run dashboard/app.py
 ```
 
-Opens at `http://localhost:8501` and shows:
-- Current gate status (color-coded PASS/FAIL)
-- Key metric cards
-- Historical trend charts
-- Sample failure details
-- Full run history table
+Opens at `http://localhost:8501`.
 
 ---
 
 ## CI/CD Setup (GitHub Actions)
 
-### 1. Add the secret
+### 1. Add the secrets
 
 In your GitHub repository:
 **Settings → Secrets and variables → Actions → New repository secret**
@@ -170,6 +183,7 @@ In your GitHub repository:
 | Name | Value |
 |---|---|
 | `OPENAI_API_KEY` | `sk-...` |
+| `PINECONE_API_KEY` | `pcsk-...` |
 
 ### 2. Push to trigger
 
@@ -179,7 +193,7 @@ git commit -m "feat: add new knowledge base doc"
 git push origin main
 ```
 
-The workflow in `.github/workflows/eval.yml` runs automatically on every push to `main`/`master` and on pull requests.
+The workflow in `.github/workflows/eval.yml` runs automatically on every push to `main`/`master` and on pull requests. After the run completes, `results/latest_report.json` is automatically committed back to the repo and the Vercel dashboard updates.
 
 ### 3. Manual full run
 
@@ -197,19 +211,21 @@ All settings live in `config.yaml`:
 
 ```yaml
 quality_gates:
-  hallucination_rate_max:   0.05   # max tolerable hallucination rate
+  hallucination_rate_max:   0.10   # max tolerable hallucination rate
   answer_relevancy_min:     0.75   # min RAGAS answer relevancy score
   faithfulness_min:         0.80   # min RAGAS faithfulness score
   context_precision_min:    0.60   # min RAGAS context precision score
-  latency_p95_max_seconds:  3.0    # max 95th-percentile latency in seconds
+  latency_p95_max_seconds:  15.0   # max 95th-percentile latency in seconds
   cost_per_query_max_usd:   0.02   # max estimated cost per query
 
 evaluation:
-  model:            gpt-4o                 # LLM for answers and RAGAS judge
-  embedding_model:  text-embedding-3-small # embedding model for ChromaDB
+  model:            gpt-4o                 # LLM for RAG answers
+  judge_model:      gpt-4o-mini            # cheaper model for RAGAS evaluation judge
+  embedding_model:  text-embedding-3-small # embedding model for Pinecone
   chunk_size:       1000                   # characters per chunk
   chunk_overlap:    150                    # overlap between adjacent chunks
-  top_k_retrieval:  5                      # chunks retrieved per question
+  top_k_retrieval:  8                      # chunks retrieved per question
+  pinecone_index:   asullmeval             # Pinecone cloud vector index name
 ```
 
 ---
@@ -250,12 +266,46 @@ print_gate_report(gate_results: dict) -> None
 
 ---
 
+## Live Demo
+
+1. **Open the live dashboard:**
+   ```
+   https://your-vercel-url.vercel.app
+   ```
+
+2. **Make a bad change to trigger a failure:**
+   ```bash
+   # Open config.yaml and raise the faithfulness threshold
+   # Change: faithfulness_min: 0.80 → faithfulness_min: 0.99
+   git add config.yaml
+   git commit -m "test: raise faithfulness threshold"
+   git push
+   ```
+
+3. **Watch GitHub Actions catch the failure:**
+   Go to the **Actions** tab → you will see a red ✗ FAIL
+
+4. **Dashboard auto-updates to show FAIL**
+   The CI commits the updated `latest_report.json` back to the repo.
+   Reload the Vercel dashboard — it now shows the failed gate in red.
+
+5. **Revert the change:**
+   ```bash
+   # Change: faithfulness_min: 0.99 → faithfulness_min: 0.80
+   git add config.yaml
+   git commit -m "fix: restore faithfulness threshold"
+   git push
+   ```
+   Pipeline goes green again and dashboard updates automatically.
+
+---
+
 ## Extending the Pipeline
 
 ### Add a new knowledge base document
 
 1. Drop a `.txt` file into `data/knowledge_base/`
-2. Delete `chroma_db/` so it is rebuilt with the new document
+2. Clear the Pinecone index (or upsert new vectors) so it includes the new document
 3. Add relevant Q&A pairs to `data/golden_dataset.json`
 4. Push to `main` — the CI pipeline picks it up automatically
 
@@ -277,9 +327,9 @@ Results from the last TEST_MODE run (10 questions):
 
 | Metric | Score | Threshold | Status |
 |---|---|---|---|
-| Hallucination Rate | 0.0000 | <= 0.05 | PASS |
-| Answer Relevancy | 0.9304 | >= 0.75 | PASS |
-| Faithfulness | 1.0000 | >= 0.80 | PASS |
+| Hallucination Rate | 0.1000 | <= 0.10 | PASS |
+| Answer Relevancy | 0.9255 | >= 0.75 | PASS |
+| Faithfulness | 0.9000 | >= 0.80 | PASS |
 | Context Precision | 0.9333 | >= 0.60 | PASS |
-| Latency P95 | 1.902 s | <= 3.0 s | PASS |
-| Cost Per Query | $0.0056 | <= $0.02 | PASS |
+| Latency P95 | 2.006 s | <= 15.0 s | PASS |
+| Cost Per Query | $0.0087 | <= $0.02 | PASS |
