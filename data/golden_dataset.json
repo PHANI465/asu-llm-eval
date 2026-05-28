@@ -1,0 +1,802 @@
+[
+  {
+    "id": 1,
+    "question": "What is the minimum GPA required for undergraduate admission to ASU?",
+    "expected_answer": "A minimum 3.00 unweighted GPA in competency courses on a 4.0 scale is required for undergraduate admission to ASU.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 2,
+    "question": "What ACT score does an Arizona resident need to get into ASU?",
+    "expected_answer": "An Arizona resident needs an ACT score of 22 for admission to ASU.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 3,
+    "question": "What ACT score does a non-resident need to get into ASU?",
+    "expected_answer": "A non-resident needs an ACT score of 24 for admission to ASU.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 4,
+    "question": "What SAT score is required for Arizona residents applying to ASU?",
+    "expected_answer": "Arizona residents need an SAT score of 1120 for admission to ASU.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 5,
+    "question": "What SAT score is required for non-residents applying to ASU?",
+    "expected_answer": "Non-residents need an SAT score of 1180 for admission to ASU.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 6,
+    "question": "Is submitting SAT or ACT scores required for admission to ASU?",
+    "expected_answer": "No, SAT and ACT scores are optional and not required for admission to ASU. They may be submitted for course placement or as supplemental information.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 7,
+    "question": "How many years of math are required for undergraduate admission to ASU?",
+    "expected_answer": "4 years of math are required for undergraduate admission to ASU.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 8,
+    "question": "How many years of lab science are required for ASU undergraduate admission?",
+    "expected_answer": "3 years of lab sciences are required, with 1 year each from biology, chemistry, earth science, integrated sciences, or physics.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 9,
+    "question": "What is the application fee for international students applying to ASU undergraduate programs?",
+    "expected_answer": "The application fee for international students applying to ASU undergraduate programs is $85.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 10,
+    "question": "What is the application fee for Arizona residents applying to ASU?",
+    "expected_answer": "The application fee for Arizona residents is $50.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 11,
+    "question": "What is the priority admission deadline for ASU fall intake?",
+    "expected_answer": "November 1 is ASU's priority admission date for fall intake.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 12,
+    "question": "What is the regular admission deadline for ASU fall intake?",
+    "expected_answer": "January 15 is ASU's regular admission date for fall intake.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 13,
+    "question": "Can a student get into ASU through Earned Admission without meeting standard requirements?",
+    "expected_answer": "Yes, a student can gain admission through Earned Admission by completing 24 semester credits with a minimum 2.75 GPA.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "hard"
+  },
+  {
+    "id": 14,
+    "question": "Does ASU require an essay or personal statement for first-year undergraduate applicants?",
+    "expected_answer": "No, ASU does not require an essay or personal statement for first-year undergraduate applicants.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 15,
+    "question": "What is the application fee for domestic non-resident students applying to ASU?",
+    "expected_answer": "The application fee for domestic non-resident students is $80.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 16,
+    "question": "What is the minimum GED score required for ASU admission for tests taken after 2013?",
+    "expected_answer": "A minimum GED score of 170 is required for tests taken after 2013.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "hard"
+  },
+  {
+    "id": 17,
+    "question": "How many years of a second language are required for ASU undergraduate admission?",
+    "expected_answer": "2 years of the same second language are required for ASU undergraduate admission.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 18,
+    "question": "What is the FAFSA priority filing date for ASU?",
+    "expected_answer": "The FAFSA priority filing date for ASU is January 15.",
+    "source_document": "undergraduate_admissions.txt",
+    "category": "admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 19,
+    "question": "What is the minimum GPA typically required for graduate admission to ASU?",
+    "expected_answer": "A minimum GPA of 3.00 on a 4.00 scale in the last 60 semester hours of undergraduate coursework is typically required for graduate admission to ASU.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 20,
+    "question": "What degree is required before applying to a graduate program at ASU?",
+    "expected_answer": "A bachelor's degree or higher from a regionally accredited US institution, or the equivalent from an internationally recognized institution, is required.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 21,
+    "question": "What is the graduate application fee for international students on a nonimmigrant visa studying in the US?",
+    "expected_answer": "The graduate application fee for international students on a nonimmigrant visa such as F-1 or H1-B studying in the US is $115.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 22,
+    "question": "What is the graduate application fee for US citizens applying to ASU?",
+    "expected_answer": "The graduate application fee for US citizens is $70.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "easy"
+  },
+  {
+    "id": 23,
+    "question": "When does the ASU graduate application open for Fall 2026?",
+    "expected_answer": "The graduate application for Fall 2026 opens on September 1, 2025.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 24,
+    "question": "When do Fall 2026 graduate classes begin at ASU?",
+    "expected_answer": "Fall 2026 graduate classes begin on August 20, 2026.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 25,
+    "question": "Does ASU accept the GRE General Test taken at home for graduate admissions?",
+    "expected_answer": "No, ASU does not accept the GRE General Test taken at home for graduate admissions.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 26,
+    "question": "What English proficiency documents do international graduate applicants need to submit?",
+    "expected_answer": "International graduate applicants must submit proof of English proficiency such as TOEFL or IELTS scores. All transcripts must be submitted in the original language along with an official English translation.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 27,
+    "question": "Are photocopied transcripts acceptable for ASU graduate applications?",
+    "expected_answer": "No, photocopies and notarized transcripts are not acceptable for ASU graduate applications. Official transcripts must be sent directly from the issuing institution.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "hard"
+  },
+  {
+    "id": 28,
+    "question": "When does the Spring 2027 graduate application open at ASU?",
+    "expected_answer": "The Spring 2027 graduate application opens on February 1, 2026.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "hard"
+  },
+  {
+    "id": 29,
+    "question": "How many letters of recommendation are typically required for ASU graduate applications?",
+    "expected_answer": "Most departments typically ask for three letters of recommendation for graduate applications at ASU.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 30,
+    "question": "When do Spring 2027 graduate classes begin at ASU?",
+    "expected_answer": "Spring 2027 graduate classes begin on January 11, 2027.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "hard"
+  },
+  {
+    "id": 31,
+    "question": "Can an applicant with below 3.0 GPA still apply for graduate admission at ASU?",
+    "expected_answer": "Yes, if an applicant does not meet the minimum 3.0 GPA requirement, their application may still be considered by the department.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "hard"
+  },
+  {
+    "id": 32,
+    "question": "What is the FAFSA priority date for graduate students applying for Fall 2026 at ASU?",
+    "expected_answer": "The FAFSA priority date for graduate students applying for Fall 2026 is January 15, 2026.",
+    "source_document": "graduate_admissions.txt",
+    "category": "graduate_admissions",
+    "difficulty": "medium"
+  },
+  {
+    "id": 33,
+    "question": "What is the base tuition for an international undergraduate student at ASU for 2026-2027?",
+    "expected_answer": "The base tuition for an international undergraduate student at ASU for 2026-2027 is $39,062 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "easy"
+  },
+  {
+    "id": 34,
+    "question": "What is the total estimated cost of attendance for an international undergraduate student at ASU?",
+    "expected_answer": "The total estimated cost of attendance for an international undergraduate student at ASU is approximately $69,906 per year for 2026-2027.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 35,
+    "question": "What is the base tuition for an Arizona resident undergraduate student at ASU for 2026-2027?",
+    "expected_answer": "The base tuition for an Arizona resident undergraduate student at ASU is $12,177 per year for 2026-2027.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "easy"
+  },
+  {
+    "id": 36,
+    "question": "What is the total estimated cost of attendance for an Arizona resident undergraduate student living on campus at Tempe?",
+    "expected_answer": "The total estimated cost of attendance for an Arizona resident undergraduate student living on campus at Tempe is $37,738 to $39,018 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 37,
+    "question": "What is the base tuition for an international graduate student at ASU for 2026-2027?",
+    "expected_answer": "The base tuition for an international graduate student at ASU is $30,348 per year for 2026-2027.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 38,
+    "question": "What is the total estimated cost of attendance for an international graduate student at ASU?",
+    "expected_answer": "The total estimated cost of attendance for an international graduate student at ASU is approximately $66,646 per year for 2026-2027.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 39,
+    "question": "What is the base tuition for an Arizona resident graduate student at ASU?",
+    "expected_answer": "The base tuition for an Arizona resident graduate student at ASU is $13,327 per year for 2026-2027.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 40,
+    "question": "What is the total estimated cost of attendance for an Arizona resident graduate student at ASU?",
+    "expected_answer": "The total estimated cost of attendance for an Arizona resident graduate student at ASU is approximately $47,265 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 41,
+    "question": "What is the Advanced Technology Fee at ASU for undergraduate students?",
+    "expected_answer": "The Advanced Technology Fee at ASU is $200 per year for undergraduate students.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 42,
+    "question": "What is the tuition surcharge at ASU?",
+    "expected_answer": "The tuition surcharge at ASU is $350 per year for both undergraduate and graduate students.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 43,
+    "question": "What is the Student Initiated Fee at ASU?",
+    "expected_answer": "The Student Initiated Fee at ASU is $807 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 44,
+    "question": "What is the International Student Fee at ASU?",
+    "expected_answer": "The International Student Fee at ASU is $400 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 45,
+    "question": "How much is health insurance for international undergraduate students at ASU?",
+    "expected_answer": "Health insurance for international undergraduate students at ASU costs $2,765 per year for 2025-2026.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 46,
+    "question": "Do online students at ASU pay out-of-state tuition?",
+    "expected_answer": "No, ASU online students do not pay out-of-state tuition. Online tuition is the same regardless of where the student lives.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 47,
+    "question": "What discount do first-year and sophomore students in the Polytechnic School and New College receive on tuition?",
+    "expected_answer": "First-year and sophomore students in the Polytechnic School and New College receive a 10% discount on tuition.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "hard"
+  },
+  {
+    "id": 48,
+    "question": "What is the estimated total cost for a non-resident online undergraduate student at ASU?",
+    "expected_answer": "The estimated total cost for a non-resident online undergraduate student at ASU is $36,672 to $38,796 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "hard"
+  },
+  {
+    "id": 49,
+    "question": "What are the estimated book and supply costs for undergraduate students at ASU?",
+    "expected_answer": "The estimated cost for books, course materials, supplies, and equipment for undergraduate students at ASU is $1,320 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 50,
+    "question": "What is the Graduate Student Support Fee at ASU?",
+    "expected_answer": "The Graduate Student Support Fee at ASU is $300 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "hard"
+  },
+  {
+    "id": 51,
+    "question": "How many credits per semester is ASU tuition based on for undergraduates?",
+    "expected_answer": "ASU undergraduate tuition is based on full-time enrollment of 12 credits per semester.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "medium"
+  },
+  {
+    "id": 52,
+    "question": "What is the estimated total cost for an online graduate Arizona resident student at ASU?",
+    "expected_answer": "The estimated total cost for an online graduate Arizona resident student at ASU is approximately $42,092 per year.",
+    "source_document": "tuition_and_fees.txt",
+    "category": "tuition",
+    "difficulty": "hard"
+  },
+  {
+    "id": 53,
+    "question": "Are first-year students required to live on campus at ASU?",
+    "expected_answer": "Yes, first-year undergraduate students are required to live on campus at ASU.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "easy"
+  },
+  {
+    "id": 54,
+    "question": "Are students living on campus required to have a meal plan at ASU?",
+    "expected_answer": "Yes, all students living on campus at ASU are required to have a meal plan.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "easy"
+  },
+  {
+    "id": 55,
+    "question": "What is the annual cost of a shared room with shared bath at Adelphi Commons on the Tempe campus?",
+    "expected_answer": "A shared room with shared bath at Adelphi Commons on the Tempe campus costs $9,420 per year.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 56,
+    "question": "What is the annual cost of a private room with private bath at Adelphi Commons on the Tempe campus?",
+    "expected_answer": "A private room with private bath at Adelphi Commons on the Tempe campus costs $11,460 per year.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 57,
+    "question": "What is the most affordable housing option at the Polytechnic campus?",
+    "expected_answer": "The most affordable housing option at the Polytechnic campus is Palo Blanco Hall with a shared room and shared bath at $7,036 per year.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "hard"
+  },
+  {
+    "id": 58,
+    "question": "How much does a studio apartment cost at 922 Place Apartments on the Tempe campus?",
+    "expected_answer": "A studio apartment at 922 Place Apartments on the Tempe campus costs $23,776 per year.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "hard"
+  },
+  {
+    "id": 59,
+    "question": "What is the cost of the Unlimited meal plan at ASU for 2026-2027?",
+    "expected_answer": "The Unlimited meal plan at ASU costs $7,180 per year for 2026-2027, which includes unlimited meals per week plus $300 in dining dollars.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 60,
+    "question": "What is the cheapest meal plan available at ASU?",
+    "expected_answer": "The cheapest meal plan available at ASU is the Gold Plan at $3,930 per year, which includes 7 meals per week plus $325 in dining dollars.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 61,
+    "question": "Can first-year students choose the All Dining Dollars meal plan at ASU?",
+    "expected_answer": "No, the All Dining Dollars meal plan is not available for first-year students at ASU.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "hard"
+  },
+  {
+    "id": 62,
+    "question": "What are the move-in dates for the Tempe campus for Fall 2025?",
+    "expected_answer": "Move-in dates for the Tempe campus for Fall 2025 are August 16 and 17.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 63,
+    "question": "What is the annual housing cost for a shared room with shared bath at Gordon Commons on the Downtown Phoenix campus?",
+    "expected_answer": "A shared room with shared bath at Gordon Commons on the Downtown Phoenix campus costs $11,718 per year.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 64,
+    "question": "What is the cost of the Maroon meal plan at ASU?",
+    "expected_answer": "The Maroon meal plan costs $5,780 per year and includes 10 meals per week plus $625 in dining dollars.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 65,
+    "question": "What is the cost of Sparky's Favorite meal plan at ASU?",
+    "expected_answer": "Sparky's Favorite meal plan costs $6,760 per year and includes 14 meals per week plus $425 in dining dollars.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 66,
+    "question": "What are the two payment options available for housing and dining at ASU?",
+    "expected_answer": "The two payment options for housing and dining at ASU are: one payment per semester, or the ASU Payment Plan which spreads payments over several months within the semester.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "medium"
+  },
+  {
+    "id": 67,
+    "question": "What is the annual cost of a studio at Fusion on First on the Downtown Phoenix campus?",
+    "expected_answer": "A studio at Fusion on First on the Downtown Phoenix campus costs $17,720 per year.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "hard"
+  },
+  {
+    "id": 68,
+    "question": "What are the move-in dates for Downtown Phoenix campus for Fall 2025?",
+    "expected_answer": "Move-in dates for the Downtown Phoenix campus for Fall 2025 are August 14 to 16.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "hard"
+  },
+  {
+    "id": 69,
+    "question": "What is the annual cost of a shared room at Casa de Oro on the West Valley campus?",
+    "expected_answer": "A shared room with shared bath at Casa de Oro on the West Valley campus costs $9,310 per year for a 4-bedroom 2-bath configuration.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "hard"
+  },
+  {
+    "id": 70,
+    "question": "Are housing and meal plan rates prorated for late check-in at ASU?",
+    "expected_answer": "No, housing and meal plan rates are not prorated for late check-in at ASU.",
+    "source_document": "housing_and_dining.txt",
+    "category": "housing",
+    "difficulty": "hard"
+  },
+  {
+    "id": 71,
+    "question": "What is the New American University Scholarship at ASU?",
+    "expected_answer": "The New American University Scholarship is a merit-based scholarship offered by ASU to international first-year and transfer F-1 students who demonstrate high academic achievement. It can reduce costs by $15,000 to $18,000 per year for strong applicants.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 72,
+    "question": "Do international students at ASU need to apply separately for the New American University Scholarship?",
+    "expected_answer": "No, international students are automatically considered for the New American University Scholarship when they apply for admission to ASU.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 73,
+    "question": "What does the Flinn Scholars Program cover at ASU?",
+    "expected_answer": "The Flinn Scholars Program is a full ride scholarship worth over $135,000 that covers tuition, fees, housing, meals, and study abroad for eligible Arizona resident undergraduates.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 74,
+    "question": "Who is eligible for the Flinn Scholars Program at ASU?",
+    "expected_answer": "The Flinn Scholars Program is available to Arizona resident undergraduate students who demonstrate academic excellence and leadership. It is a highly competitive scholarship.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 75,
+    "question": "What does the Barack Obama Scholars Program cover at ASU?",
+    "expected_answer": "The Barack Obama Scholars Program covers tuition, undergraduate college fees, student-initiated fees, and a portion of housing, food, books, course materials, supplies, and equipment for up to four years for eligible Arizona residents.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 76,
+    "question": "Can international students at ASU qualify for federal financial aid?",
+    "expected_answer": "No, international students at ASU do not qualify for federal or state financial aid unless they are an eligible noncitizen.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "easy"
+  },
+  {
+    "id": 77,
+    "question": "What is the Western Undergraduate Exchange program at ASU?",
+    "expected_answer": "The Western Undergraduate Exchange (WUE) is a program that allows students from eligible western states such as California, Nevada, Oregon, Washington, Hawaii, and others to pay approximately 150% of in-state tuition instead of the full non-resident rate. It is available at the Downtown Phoenix, Polytechnic, and West Valley campuses.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 78,
+    "question": "Is the Western Undergraduate Exchange program still available for new students starting Fall 2026?",
+    "expected_answer": "No, the WUE program ends for new admits starting Fall 2026. It will be replaced by the ASU Commitment Scholarship for nonresidents.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "hard"
+  },
+  {
+    "id": 79,
+    "question": "What is the range of first-generation scholarships offered in the College of Liberal Arts at ASU?",
+    "expected_answer": "First-generation scholarships in the College of Liberal Arts at ASU range from $750 to $6,500 per year.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 80,
+    "question": "What percentage of ASU students receive merit-based financial aid?",
+    "expected_answer": "Approximately 80% of ASU students receive some form of merit-based financial aid.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 81,
+    "question": "What is the average net price at ASU after grants and scholarships?",
+    "expected_answer": "The average net price at ASU is approximately $16,400 per year after grants and scholarships, excluding loans.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 82,
+    "question": "Can international students work on campus at ASU?",
+    "expected_answer": "Yes, international students can work on campus at ASU. On-campus job listings are available at students.asu.edu/employment/search.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 83,
+    "question": "What is ASU's Federal School Code for FAFSA?",
+    "expected_answer": "ASU's Federal School Code for FAFSA is 001081.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "hard"
+  },
+  {
+    "id": 84,
+    "question": "What is the Arizona Promise Scholarship at ASU?",
+    "expected_answer": "The Arizona Promise Scholarship helps eligible Arizona residents cover remaining tuition and fee costs that are not covered by other financial aid.",
+    "source_document": "scholarships_and_financial_aid.txt",
+    "category": "scholarships",
+    "difficulty": "medium"
+  },
+  {
+    "id": 85,
+    "question": "When was Arizona State University founded?",
+    "expected_answer": "Arizona State University was founded in 1885.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 86,
+    "question": "How many students are enrolled at Arizona State University?",
+    "expected_answer": "Arizona State University has over 140,000 students enrolled.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 87,
+    "question": "What is the acceptance rate at Arizona State University?",
+    "expected_answer": "The acceptance rate at Arizona State University is approximately 89.9%, making it a very accessible university.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 88,
+    "question": "How many undergraduate majors does ASU offer?",
+    "expected_answer": "ASU offers over 350 undergraduate majors.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 89,
+    "question": "What are the campus locations of Arizona State University?",
+    "expected_answer": "ASU has campuses in Tempe, Downtown Phoenix, Polytechnic, West Valley (Glendale), Lake Havasu, Los Angeles, and ASU Online.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 90,
+    "question": "What is the focus of the ASU Polytechnic Campus?",
+    "expected_answer": "The ASU Polytechnic Campus focuses on engineering, technology, and aviation programs.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 91,
+    "question": "What additional requirements does Barrett, The Honors College have at ASU?",
+    "expected_answer": "Barrett, The Honors College requires additional application essays and has higher academic expectations compared to standard ASU admission. Students in Barrett also pay higher housing and meal costs due to Barrett residential halls.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 92,
+    "question": "What law school does ASU have?",
+    "expected_answer": "ASU has the Sandra Day O'Connor College of Law.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 93,
+    "question": "What journalism school does ASU have?",
+    "expected_answer": "ASU has the Walter Cronkite School of Journalism.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 94,
+    "question": "When do Fall semester classes typically begin at ASU?",
+    "expected_answer": "Fall semester classes at ASU typically begin in mid-August.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 95,
+    "question": "What is the business school at ASU called?",
+    "expected_answer": "The business school at ASU is called the W. P. Carey School of Business.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 96,
+    "question": "What is the engineering school at ASU called?",
+    "expected_answer": "The engineering school at ASU is called the Ira A. Fulton Schools of Engineering.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 97,
+    "question": "Is ASU primarily an online or on-campus university as of Fall 2025?",
+    "expected_answer": "As of Fall 2025, ASU became a majority online university.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "hard"
+  },
+  {
+    "id": 98,
+    "question": "Where is Arizona State University located?",
+    "expected_answer": "Arizona State University is located in the greater Phoenix metropolitan area in Arizona.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "easy"
+  },
+  {
+    "id": 99,
+    "question": "What education school does ASU have?",
+    "expected_answer": "ASU has the Mary Lou Fulton Teachers College for education programs.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "medium"
+  },
+  {
+    "id": 100,
+    "question": "Does ASU offer summer sessions in addition to fall and spring semesters?",
+    "expected_answer": "Yes, ASU offers summer sessions in addition to the regular fall and spring semesters.",
+    "source_document": "campus_and_programs.txt",
+    "category": "general_info",
+    "difficulty": "easy"
+  }
+]
