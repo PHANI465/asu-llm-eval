@@ -47,14 +47,10 @@ jobs:
     name: RAGAS Quality Gates
     runs-on: ubuntu-latest
 
-    # Use Node.js 24 for all actions — avoids the Node.js 20 deprecation warnings
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
     steps:
       # ── 1. Checkout ───────────────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # ── 2. Validate required secret ───────────────────────────────────────
       #    Fail early with a clear message instead of a cryptic API error
@@ -111,7 +107,7 @@ jobs:
       #    if: always() ensures artifact is uploaded even when gates fail.
       - name: Upload evaluation report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: evaluation-report-${{ github.run_number }}
           path: results/latest_report.json
