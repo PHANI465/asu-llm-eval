@@ -2,7 +2,7 @@
 
 An automated CI/CD pipeline that evaluates the quality of an ASU university RAG chatbot on every GitHub push. Uses **RAGAS** to score faithfulness, relevancy, and precision; enforces thresholds through quality gates; and visualises results in a live React dashboard deployed on Vercel.
 
-> **Live Dashboard:** https://your-vercel-url.vercel.app
+> **Live Dashboard:** https://asu-llm-eval.vercel.app/
 > **GitHub Repo:** https://github.com/PHANI465/asu-llm-eval
 
 ---
