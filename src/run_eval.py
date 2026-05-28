@@ -49,10 +49,10 @@ if _SRC_DIR not in sys.path:
 _ENV_PATH = os.path.join(_PROJECT_ROOT, ".env")
 load_dotenv(dotenv_path=_ENV_PATH)
 
-# Sibling module imports (available because _SRC_DIR is on sys.path)
-import rag_pipeline
-import evaluator
-import quality_gates
+# NOTE: rag_pipeline / evaluator / quality_gates are imported *inside* main()
+# so that any import-time exception (e.g. missing OPENAI_API_KEY) is caught by
+# the top-level handler in __main__ which writes a minimal error report.
+# This guarantees results/latest_report.json always exists after a CI run.
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -446,6 +446,12 @@ def main() -> int:
     Orchestrate the full evaluation pipeline.
     Returns 0 (PASS) or 1 (FAIL) for GitHub Actions.
     """
+    # Pipeline module imports are here (not at file top) so that any import-time
+    # error (missing API key, bad dep) is caught by the __main__ crash handler.
+    import rag_pipeline
+    import evaluator
+    import quality_gates
+
     run_timestamp = datetime.now().isoformat(timespec="seconds")
     commit_id     = _get_commit_id()
     run_start     = time.perf_counter()
@@ -519,5 +525,55 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    exit_code = main()
+    try:
+        exit_code = main()
+
+    except Exception as exc:
+        # ----------------------------------------------------------------
+        # Crash safety net — always write a minimal report so the CI
+        # artifact upload step has a file to upload, even if the pipeline
+        # crashes before reaching save_json_report().
+        # ----------------------------------------------------------------
+        import traceback as _tb
+
+        _ts = datetime.now().isoformat(timespec="seconds")
+        _err_str = f"{type(exc).__name__}: {exc}"
+        _tb_str  = _tb.format_exc()
+
+        print(f"\n{'=' * 44}")
+        print(f"  [FATAL] Pipeline crashed before completing.")
+        print(f"  Error  : {_err_str}")
+        print(f"{'=' * 44}")
+        print(_tb_str)
+
+        # Try to write a minimal error report so the dashboard and CI
+        # artifact always have something to show.
+        try:
+            os.makedirs(_RESULTS_DIR, exist_ok=True)
+            _error_report = {
+                "run_timestamp":   _ts,
+                "commit_id":       _get_commit_id(),
+                "total_questions": 0,
+                "test_mode":       TEST_MODE,
+                "overall_result":  "ERROR",
+                "failed_gates":    [],
+                "metrics":         {},
+                "gate_results": {
+                    "overall":      "ERROR",
+                    "passed_gates": [],
+                    "failed_gates": [],
+                    "gates":        {},
+                },
+                "sample_failures": [],
+                "pipeline_error":  _err_str,
+                "traceback":       _tb_str,
+            }
+            with open(_REPORT_PATH, "w", encoding="utf-8") as _f:
+                json.dump(_error_report, _f, indent=2)
+            print(f"[FATAL] Error report saved → {_REPORT_PATH}")
+        except Exception as _report_exc:
+            print(f"[FATAL] Could not write error report: {_report_exc}")
+
+        exit_code = 1
+
     sys.exit(exit_code)
