@@ -7,7 +7,8 @@ quality_gates:
   cost_per_query_max_usd: 0.02
 
 evaluation:
-  model: gpt-4o
+  model: gpt-4o                    # RAG answer model (quality matters here — keep 4o)
+  judge_model: gpt-4o-mini         # RAGAS evaluation judge (mini is sufficient + 25x cheaper)
   embedding_model: text-embedding-3-small
   chunk_size: 1000
   chunk_overlap: 150

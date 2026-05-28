@@ -113,6 +113,21 @@ def inject_css(t: dict) -> None:
         ::-webkit-scrollbar-track {{ background: {t["app_bg"]}; }}
         ::-webkit-scrollbar-thumb {{ background: {t["border_hi"]}; border-radius: 3px; }}
 
+        /* ── Remove white gaps injected around st.html() blocks ── */
+        [data-testid="stHtml"] {{
+            margin: 0 !important;
+            padding: 0 !important;
+            line-height: 1 !important;
+        }}
+        div.element-container:has([data-testid="stHtml"]) {{
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+        }}
+        /* Tighten global vertical rhythm */
+        .element-container {{
+            margin-bottom: 0.15rem !important;
+        }}
+
         .stButton > button {{
             background: {t["gold"]} !important;
             color: {"#000" if is_dark else "#fff"} !important;
