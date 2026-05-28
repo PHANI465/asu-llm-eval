@@ -1,12 +1,14 @@
 # =============================================================================
 # src/rag_pipeline.py
-# ASU LLM Evaluation — RAG Pipeline
+# ASU LLM Evaluation — RAG Pipeline (Pinecone backend)
 #
 # Responsibilities:
 #   1. Load .txt documents from data/knowledge_base/
 #   2. Chunk them with configurable size / overlap
-#   3. Embed with OpenAI text-embedding-3-small
-#   4. Persist vectors in ChromaDB (skip rebuild if already exists)
+#   3. Embed with OpenAI text-embedding-3-small (1536 dims)
+#   4. Store / retrieve vectors via Pinecone cloud index "asullmeval"
+#        - If index is empty  → embed all chunks and upsert
+#        - If index has data  → connect directly (skip re-upload)
 #   5. Expose get_answer(question) -> dict with answer + metadata
 # =============================================================================
 
@@ -20,21 +22,29 @@ from dotenv import load_dotenv
 from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import Chroma
+from langchain_pinecone import PineconeVectorStore
 from langchain.schema import SystemMessage, HumanMessage
+from pinecone import Pinecone
 
 # -----------------------------------------------------------------------------
 # 0. Bootstrap — load env vars and project config
 # -----------------------------------------------------------------------------
 
-# Load OPENAI_API_KEY from .env (project root)
+# Load OPENAI_API_KEY + PINECONE_API_KEY from .env (project root)
 _ENV_PATH = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=_ENV_PATH)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+
 if not OPENAI_API_KEY:
     raise EnvironmentError(
         "OPENAI_API_KEY not found. "
+        "Make sure it is set in the .env file at the project root."
+    )
+if not PINECONE_API_KEY:
+    raise EnvironmentError(
+        "PINECONE_API_KEY not found. "
         "Make sure it is set in the .env file at the project root."
     )
 
@@ -43,17 +53,17 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_CONFIG_PATH, "r") as _f:
     _CONFIG = yaml.safe_load(_f)
 
-_EVAL_CFG = _CONFIG["evaluation"]
-CHUNK_SIZE        = _EVAL_CFG["chunk_size"]          # 1000
-CHUNK_OVERLAP     = _EVAL_CFG["chunk_overlap"]        # 150
-TOP_K             = _EVAL_CFG["top_k_retrieval"]      # 5
-EMBED_MODEL       = _EVAL_CFG["embedding_model"]      # text-embedding-3-small
-LLM_MODEL         = _EVAL_CFG["model"]                # gpt-4o
+_EVAL_CFG      = _CONFIG["evaluation"]
+CHUNK_SIZE     = _EVAL_CFG["chunk_size"]           # 1000
+CHUNK_OVERLAP  = _EVAL_CFG["chunk_overlap"]         # 150
+TOP_K          = _EVAL_CFG["top_k_retrieval"]       # 8
+EMBED_MODEL    = _EVAL_CFG["embedding_model"]       # text-embedding-3-small
+LLM_MODEL      = _EVAL_CFG["model"]                 # gpt-4o
+PINECONE_INDEX = _EVAL_CFG["pinecone_index"]        # asullmeval
 
 # Paths
-_PROJECT_ROOT    = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-KNOWLEDGE_BASE   = os.path.join(_PROJECT_ROOT, "data", "knowledge_base")
-CHROMA_DB_DIR    = os.path.join(_PROJECT_ROOT, "chroma_db")
+_PROJECT_ROOT  = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+KNOWLEDGE_BASE = os.path.join(_PROJECT_ROOT, "data", "knowledge_base")
 
 # -----------------------------------------------------------------------------
 # 1. System prompt for the LLM
@@ -97,7 +107,7 @@ def load_documents():
         try:
             loader = TextLoader(path, encoding="utf-8")
             docs = loader.load()
-            # Tag every page with the source filename for easy traceability
+            # Tag every chunk with the source filename for traceability
             for doc in docs:
                 doc.metadata["source"] = filename
             all_docs.extend(docs)
@@ -107,6 +117,7 @@ def load_documents():
 
     print(f"   >> {len(all_docs)} document(s) loaded from {len(txt_files)} file(s).")
     return all_docs
+
 
 # -----------------------------------------------------------------------------
 # 3. Chunking
@@ -125,57 +136,67 @@ def split_documents(documents):
         separators=["\n\n", "\n", " ", ""],
     )
     chunks = splitter.split_documents(documents)
-    print(f"   >>{len(chunks)} chunk(s) created.")
+    print(f"   >> {len(chunks)} chunk(s) created.")
     return chunks
 
+
 # -----------------------------------------------------------------------------
-# 4. Embeddings + ChromaDB (create or load)
+# 4. Pinecone vector store — connect or build
 # -----------------------------------------------------------------------------
 
 def build_or_load_vectorstore(chunks=None):
     """
-    If ./chroma_db already contains data, load it directly.
-    Otherwise embed the provided chunks and persist a new ChromaDB store.
-    Returns a LangChain Chroma vectorstore instance.
+    Connect to the Pinecone index 'asullmeval'.
+
+    - If the index already contains vectors → connect and return immediately.
+    - If the index is empty → embed all chunks and upsert, then return.
+
+    Returns a LangChain PineconeVectorStore instance ready for retrieval.
     """
     embeddings = OpenAIEmbeddings(
         model=EMBED_MODEL,
         openai_api_key=OPENAI_API_KEY,
     )
 
-    # Detect whether the DB has already been built
-    db_populated = (
-        os.path.isdir(CHROMA_DB_DIR)
-        and any(True for _ in os.scandir(CHROMA_DB_DIR))
-    )
+    print(f"\n[3/4] Connecting to Pinecone index: {PINECONE_INDEX}")
 
-    if db_populated:
-        print(f"\n[3/4] ChromaDB found at '{CHROMA_DB_DIR}' — loading existing store.")
-        vectorstore = Chroma(
-            persist_directory=CHROMA_DB_DIR,
-            embedding_function=embeddings,
+    # Initialise the Pinecone client and describe the index
+    pc    = Pinecone(api_key=PINECONE_API_KEY)
+    index = pc.Index(PINECONE_INDEX)
+    stats = index.describe_index_stats()
+    vector_count = stats.total_vector_count
+
+    if vector_count > 0:
+        # Index already populated — just wrap it for LangChain
+        print(f"   Index has {vector_count} vectors — skipping re-upload.")
+        vectorstore = PineconeVectorStore(
+            index=index,
+            embedding=embeddings,
         )
-        count = vectorstore._collection.count()
-        print(f"   >>{count} vector(s) already stored. Skipping re-embedding.")
     else:
+        # Index is empty — embed and upsert all chunks
         if chunks is None:
-            raise ValueError("chunks must be provided when ChromaDB does not exist yet.")
-        print(f"\n[3/4] Creating embeddings & persisting to '{CHROMA_DB_DIR}'...")
-        vectorstore = Chroma.from_documents(
+            raise ValueError(
+                "chunks must be provided when the Pinecone index is empty."
+            )
+        print(f"   Index is empty — uploading {len(chunks)} vectors now...")
+        vectorstore = PineconeVectorStore.from_documents(
             documents=chunks,
             embedding=embeddings,
-            persist_directory=CHROMA_DB_DIR,
+            index_name=PINECONE_INDEX,
+            pinecone_api_key=PINECONE_API_KEY,
         )
-        count = vectorstore._collection.count()
-        print(f"   >>{count} vector(s) embedded and stored.")
+        print("   Vectors uploaded successfully.")
 
     return vectorstore
+
 
 # -----------------------------------------------------------------------------
 # 5. Module-level vectorstore (lazy singleton — built once per process)
 # -----------------------------------------------------------------------------
 
 _vectorstore = None
+
 
 def _get_vectorstore():
     """Return the shared vectorstore, initialising it on first call."""
@@ -186,13 +207,14 @@ def _get_vectorstore():
         _vectorstore = build_or_load_vectorstore(chunks)
     return _vectorstore
 
+
 # -----------------------------------------------------------------------------
 # 6. Main public API — get_answer()
 # -----------------------------------------------------------------------------
 
 def get_answer(question: str) -> dict:
     """
-    Given a question string, retrieve the top-K relevant chunks from ChromaDB
+    Given a question string, retrieve the top-K relevant chunks from Pinecone
     and generate an answer using GPT-4o.
 
     Returns
@@ -211,11 +233,11 @@ def get_answer(question: str) -> dict:
         vs = _get_vectorstore()
 
         # --- Retrieve top-K chunks ---
-        retriever = vs.as_retriever(search_kwargs={"k": TOP_K})
+        retriever     = vs.as_retriever(search_kwargs={"k": TOP_K})
         relevant_docs = retriever.invoke(question)
 
-        retrieved_chunks   = [doc.page_content for doc in relevant_docs]
-        source_documents   = [doc.metadata.get("source", "unknown") for doc in relevant_docs]
+        retrieved_chunks = [doc.page_content for doc in relevant_docs]
+        source_documents = [doc.metadata.get("source", "unknown") for doc in relevant_docs]
 
         # --- Build context block for the prompt ---
         context_block = "\n\n---\n\n".join(
@@ -266,19 +288,20 @@ def get_answer(question: str) -> dict:
         "token_usage":      token_usage,
     }
 
+
 # -----------------------------------------------------------------------------
 # 7. Quick-test entry point
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  ASU RAG Pipeline - Quick Test")
+    print("  ASU RAG Pipeline — Quick Test (Pinecone backend)")
     print("=" * 60)
 
     TEST_QUESTIONS = [
-        "What is the minimum GPA required for undergraduate admission to ASU?",
-        "What is the tuition for an international undergraduate student at ASU?",
-        "What meal plans are available at ASU and how much do they cost?",
+        "What is the minimum GPA for undergraduate admission?",
+        "What is the tuition for international students?",
+        "What meal plans are available at ASU?",
     ]
 
     print("\n[4/4] Running test queries...\n")

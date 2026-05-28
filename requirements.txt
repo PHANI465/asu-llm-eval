@@ -1,7 +1,8 @@
 langchain==0.3.25
 langchain-openai==0.3.16
 langchain-community==0.3.23
-chromadb==1.0.7
+langchain-pinecone==0.2.13
+pinecone-client==6.0.0
 ragas==0.2.15
 openai==1.82.0
 streamlit==1.45.1
