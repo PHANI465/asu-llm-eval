@@ -1,15 +1,15 @@
 {
-  "run_timestamp": "2026-05-28T21:14:30",
-  "commit_id": "6def2e6",
+  "run_timestamp": "2026-05-28T21:49:06",
+  "commit_id": "75ccba8",
   "total_questions": 10,
   "test_mode": true,
   "metrics": {
     "hallucination_rate": 0.1,
-    "answer_relevancy": 0.9287,
+    "answer_relevancy": 0.9284,
     "faithfulness": 0.9,
     "context_precision": 0.9333,
-    "latency_p95_seconds": 1.396,
-    "cost_per_query_usd": 0.008717
+    "latency_p95_seconds": 3.847,
+    "cost_per_query_usd": 0.008718
   },
   "gate_results": {
     "overall": "PASS",
@@ -30,10 +30,10 @@
         "message": "PASS: 0.1 below max 0.1"
       },
       "answer_relevancy": {
-        "value": 0.9287,
+        "value": 0.9284,
         "threshold": 0.75,
         "passed": true,
-        "message": "PASS: 0.9287 above min 0.75"
+        "message": "PASS: 0.9284 above min 0.75"
       },
       "faithfulness": {
         "value": 0.9,
@@ -48,16 +48,16 @@
         "message": "PASS: 0.9333 above min 0.6"
       },
       "latency_p95": {
-        "value": 1.396,
+        "value": 3.847,
         "threshold": 15.0,
         "passed": true,
-        "message": "PASS: 1.396 below max 15.0"
+        "message": "PASS: 3.847 below max 15.0"
       },
       "cost_per_query": {
-        "value": 0.008717,
+        "value": 0.008718,
         "threshold": 0.02,
         "passed": true,
-        "message": "PASS: 0.008717 below max 0.02"
+        "message": "PASS: 0.008718 below max 0.02"
       }
     }
   },
