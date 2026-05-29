@@ -1,29 +1,30 @@
 {
-  "run_timestamp": "2026-05-28T16:04:03",
-  "commit_id": "75ccba8",
+  "run_timestamp": "2026-05-28T23:36:54",
+  "commit_id": "929c9ef",
   "total_questions": 10,
   "test_mode": true,
-  "total_cost_usd": 0.08718,
-  "total_tokens": 17436,
+  "total_cost_usd": 0.0,
+  "total_tokens": 0,
   "metrics": {
     "hallucination_rate": 0.0,
-    "answer_relevancy": 0.9105,
-    "faithfulness": 1.0,
-    "context_precision": 0.9167,
-    "latency_p95_seconds": 4.843,
-    "cost_per_query_usd": 0.008718
+    "answer_relevancy": null,
+    "faithfulness": null,
+    "context_precision": 0.0,
+    "latency_p95_seconds": 2.197,
+    "cost_per_query_usd": 0.0
   },
   "gate_results": {
-    "overall": "PASS",
+    "overall": "FAIL",
     "passed_gates": [
       "hallucination_rate",
-      "answer_relevancy",
-      "faithfulness",
-      "context_precision",
       "latency_p95",
       "cost_per_query"
     ],
-    "failed_gates": [],
+    "failed_gates": [
+      "answer_relevancy",
+      "faithfulness",
+      "context_precision"
+    ],
     "gates": {
       "hallucination_rate": {
         "value": 0.0,
@@ -32,169 +33,173 @@
         "message": "PASS: 0.0 below max 0.1"
       },
       "answer_relevancy": {
-        "value": 0.9105,
+        "value": null,
         "threshold": 0.75,
-        "passed": true,
-        "message": "PASS: 0.9105 above min 0.75"
+        "passed": false,
+        "message": "SKIP: no value available for 'answer_relevancy'"
       },
       "faithfulness": {
-        "value": 1.0,
+        "value": null,
         "threshold": 0.8,
-        "passed": true,
-        "message": "PASS: 1.0 above min 0.8"
+        "passed": false,
+        "message": "SKIP: no value available for 'faithfulness'"
       },
       "context_precision": {
-        "value": 0.9167,
+        "value": 0.0,
         "threshold": 0.6,
-        "passed": true,
-        "message": "PASS: 0.9167 above min 0.6"
+        "passed": false,
+        "message": "FAIL: 0.0 below min 0.6"
       },
       "latency_p95": {
-        "value": 4.843,
+        "value": 2.197,
         "threshold": 15.0,
         "passed": true,
-        "message": "PASS: 4.843 below max 15.0"
+        "message": "PASS: 2.197 below max 15.0"
       },
       "cost_per_query": {
-        "value": 0.008718,
+        "value": 0.0,
         "threshold": 0.02,
         "passed": true,
-        "message": "PASS: 0.008718 below max 0.02"
+        "message": "PASS: 0.0 below max 0.02"
       }
     }
   },
-  "overall_result": "PASS",
-  "failed_gates": [],
+  "overall_result": "FAIL",
+  "failed_gates": [
+    "answer_relevancy",
+    "faithfulness",
+    "context_precision"
+  ],
   "sample_failures": [],
   "all_results": [
     {
-      "id": null,
+      "id": 1,
       "question": "What is the minimum GPA required for undergraduate admission to ASU?",
-      "answer": "The minimum GPA required for undergraduate admission to ASU is an unweighted 3.00 on a 4.00 scale in competency courses.",
-      "category": "",
-      "difficulty": "",
-      "faithfulness": 1.0,
-      "answer_relevancy": 1.0,
-      "context_precision": 0.3333,
-      "latency_seconds": 1.238,
-      "token_usage": 1564,
-      "passed": true
-    },
-    {
-      "id": null,
-      "question": "What ACT score does an Arizona resident need to get into ASU?",
-      "answer": "If submitting ACT scores, the minimum threshold for Arizona residents is 22, though ACT submission is optional.",
-      "category": "",
-      "difficulty": "",
-      "faithfulness": 1.0,
-      "answer_relevancy": 0.8375,
-      "context_precision": 1.0,
-      "latency_seconds": 1.497,
-      "token_usage": 1749,
-      "passed": true
-    },
-    {
-      "id": null,
-      "question": "What ACT score does a non-resident need to get into ASU?",
-      "answer": "If submitting ACT scores, the minimum threshold for non-residents is 24, though ACT submission is optional.",
-      "category": "",
-      "difficulty": "",
-      "faithfulness": 1.0,
-      "answer_relevancy": 0.6948,
-      "context_precision": 1.0,
-      "latency_seconds": 1.205,
-      "token_usage": 1751,
-      "passed": true
-    },
-    {
-      "id": null,
-      "question": "What SAT score is required for Arizona residents applying to ASU?",
-      "answer": "The SAT score threshold for Arizona residents is 1120 if submitting scores, though SAT submission is optional.",
-      "category": "",
-      "difficulty": "",
-      "faithfulness": 1.0,
-      "answer_relevancy": 0.8507,
-      "context_precision": 1.0,
-      "latency_seconds": 1.059,
-      "token_usage": 1748,
-      "passed": true
-    },
-    {
-      "id": null,
-      "question": "What SAT score is required for non-residents applying to ASU?",
-      "answer": "The SAT score threshold for non-residents applying to ASU is 1180 if submitting scores, though SAT submission is optional.",
-      "category": "",
-      "difficulty": "",
-      "faithfulness": 1.0,
-      "answer_relevancy": 0.9401,
-      "context_precision": 1.0,
-      "latency_seconds": 2.377,
-      "token_usage": 1754,
-      "passed": true
-    },
-    {
-      "id": null,
-      "question": "Is submitting SAT or ACT scores required for admission to ASU?",
-      "answer": "No, submitting SAT or ACT scores is not required for admission to ASU. They may be submitted optionally for course placement or to satisfy aptitude requirements as an alternative to GPA or class rank.",
-      "category": "",
-      "difficulty": "",
-      "faithfulness": 1.0,
-      "answer_relevancy": 0.9721,
-      "context_precision": 1.0,
-      "latency_seconds": 1.033,
-      "token_usage": 1685,
-      "passed": true
-    },
-    {
-      "id": null,
-      "question": "How many years of math are required for undergraduate admission to ASU?",
-      "answer": "4 years of math are required for undergraduate admission to ASU.",
-      "category": "",
-      "difficulty": "",
-      "faithfulness": 1.0,
-      "answer_relevancy": 1.0,
-      "context_precision": 1.0,
-      "latency_seconds": 6.86,
-      "token_usage": 1741,
-      "passed": true
-    },
-    {
-      "id": null,
-      "question": "How many years of lab science are required for ASU undergraduate admission?",
-      "answer": "3 years of lab sciences are required for ASU undergraduate admission.",
-      "category": "",
-      "difficulty": "",
-      "faithfulness": 1.0,
-      "answer_relevancy": 0.9888,
-      "context_precision": 1.0,
-      "latency_seconds": 0.962,
-      "token_usage": 1602,
-      "passed": true
-    },
-    {
-      "id": null,
-      "question": "What is the application fee for international students applying to ASU undergraduate programs?",
-      "answer": "The application fee for international students applying to ASU undergraduate programs is $85.",
-      "category": "",
-      "difficulty": "",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "easy",
       "faithfulness": null,
       "answer_relevancy": null,
-      "context_precision": null,
-      "latency_seconds": 1.32,
-      "token_usage": 1881,
+      "context_precision": 0.0,
+      "latency_seconds": 1.446,
+      "token_usage": 0,
       "passed": false
     },
     {
-      "id": null,
-      "question": "What is the application fee for Arizona residents applying to ASU?",
-      "answer": "The application fee for Arizona residents applying to ASU is $50.",
-      "category": "",
-      "difficulty": "",
+      "id": 2,
+      "question": "What ACT score does an Arizona resident need to get into ASU?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "easy",
       "faithfulness": null,
       "answer_relevancy": null,
-      "context_precision": null,
-      "latency_seconds": 1.803,
-      "token_usage": 1961,
+      "context_precision": 0.0,
+      "latency_seconds": 1.45,
+      "token_usage": 0,
+      "passed": false
+    },
+    {
+      "id": 3,
+      "question": "What ACT score does a non-resident need to get into ASU?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "easy",
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": 0.0,
+      "latency_seconds": 2.127,
+      "token_usage": 0,
+      "passed": false
+    },
+    {
+      "id": 4,
+      "question": "What SAT score is required for Arizona residents applying to ASU?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "easy",
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": 0.0,
+      "latency_seconds": 1.849,
+      "token_usage": 0,
+      "passed": false
+    },
+    {
+      "id": 5,
+      "question": "What SAT score is required for non-residents applying to ASU?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "easy",
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": 0.0,
+      "latency_seconds": 2.254,
+      "token_usage": 0,
+      "passed": false
+    },
+    {
+      "id": 6,
+      "question": "Is submitting SAT or ACT scores required for admission to ASU?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "medium",
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": 0.0,
+      "latency_seconds": 1.732,
+      "token_usage": 0,
+      "passed": false
+    },
+    {
+      "id": 7,
+      "question": "How many years of math are required for undergraduate admission to ASU?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "easy",
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": 0.0,
+      "latency_seconds": 1.449,
+      "token_usage": 0,
+      "passed": false
+    },
+    {
+      "id": 8,
+      "question": "How many years of lab science are required for ASU undergraduate admission?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "medium",
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": 0.0,
+      "latency_seconds": 1.462,
+      "token_usage": 0,
+      "passed": false
+    },
+    {
+      "id": 9,
+      "question": "What is the application fee for international students applying to ASU undergraduate programs?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "easy",
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": 0.0,
+      "latency_seconds": 1.475,
+      "token_usage": 0,
+      "passed": false
+    },
+    {
+      "id": 10,
+      "question": "What is the application fee for Arizona residents applying to ASU?",
+      "answer": "Error generating answer: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "category": "admissions",
+      "difficulty": "easy",
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": 0.0,
+      "latency_seconds": 1.479,
+      "token_usage": 0,
       "passed": false
     }
   ]

@@ -15,6 +15,26 @@
       "total_tokens": 17436,
       "overall_result": "PASS",
       "failed_gates": []
+    },
+    {
+      "run_timestamp": "2026-05-28T23:36:54",
+      "commit_id": "929c9ef",
+      "total_questions": 10,
+      "test_mode": true,
+      "hallucination_rate": 0.0,
+      "answer_relevancy": null,
+      "faithfulness": null,
+      "context_precision": 0.0,
+      "latency_p95_seconds": 2.197,
+      "cost_per_query_usd": 0.0,
+      "total_cost_usd": 0.0,
+      "total_tokens": 0,
+      "overall_result": "FAIL",
+      "failed_gates": [
+        "answer_relevancy",
+        "faithfulness",
+        "context_precision"
+      ]
     }
   ]
 }
