@@ -7,11 +7,14 @@
 
 import json
 import os
-import sqlite3
+import sys
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from project_config import RESULTS_DIR, load_config  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0.  Page config  (must be FIRST Streamlit call)
@@ -280,10 +283,19 @@ def _hex_rgba(hex_color: str, alpha: float = 0.08) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # 4.  Paths & data loaders
 # ─────────────────────────────────────────────────────────────────────────────
-_DIR         = os.path.dirname(os.path.abspath(__file__))
-_ROOT        = os.path.abspath(os.path.join(_DIR, ".."))
-_REPORT_PATH = os.path.join(_ROOT, "results", "latest_report.json")
-_DB_PATH     = os.path.join(_ROOT, "results", "eval_history.db")
+_REPORT_PATH  = os.path.join(RESULTS_DIR, "latest_report.json")
+_HISTORY_PATH = os.path.join(RESULTS_DIR, "eval_history.json")   # same source as CI + React dashboard
+
+# config.yaml threshold key for each gate — fallback when a report predates a gate
+_THRESHOLD_KEYS = {
+    "hallucination_rate": "hallucination_rate_max",
+    "answer_relevancy":   "answer_relevancy_min",
+    "faithfulness":       "faithfulness_min",
+    "context_precision":  "context_precision_min",
+    "latency_p95":        "latency_p95_max_seconds",
+    "cost_per_query":     "cost_per_query_max_usd",
+    "error_rate":         "error_rate_max",
+}
 
 
 @st.cache_data(ttl=30)
@@ -299,35 +311,43 @@ def load_report() -> dict | None:
 
 @st.cache_data(ttl=30)
 def load_history() -> pd.DataFrame:
-    if not os.path.exists(_DB_PATH):
+    if not os.path.exists(_HISTORY_PATH):
         return pd.DataFrame()
     try:
-        conn = sqlite3.connect(_DB_PATH)
-        tbl = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='eval_runs'"
-        ).fetchone()
-        if not tbl:
-            conn.close()
-            return pd.DataFrame()
-        df = pd.read_sql_query(
-            "SELECT * FROM eval_runs ORDER BY run_timestamp ASC", conn
-        )
-        conn.close()
+        with open(_HISTORY_PATH, "r", encoding="utf-8") as f:
+            df = pd.DataFrame(json.load(f).get("runs", []))
         if not df.empty:
-            df["run_timestamp"] = pd.to_datetime(df["run_timestamp"])
+            # Older runs have naive timestamps, newer ones are UTC with an offset
+            df["run_timestamp"] = pd.to_datetime(df["run_timestamp"], utc=True, format="ISO8601")
+            df = df.sort_values("run_timestamp")
         return df
     except Exception:
         return pd.DataFrame()
+
+
+def gate_thresholds(gates: dict) -> dict:
+    """Thresholds the latest run was judged against, falling back to config.yaml."""
+    try:
+        configured = load_config()["quality_gates"]
+    except Exception:
+        configured = {}
+    return {
+        gate: (gates.get(gate) or {}).get("threshold", configured.get(key))
+        for gate, key in _THRESHOLD_KEYS.items()
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5.  HTML component builders  (all use the active theme dict `T`)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _hero(overall, ts, commit, n_q, test_mode) -> str:
-    badge_color = T["green"] if overall == "PASS" else T["red"]
-    mode_label  = "⚡ TEST MODE — 10 questions" if test_mode else "🚀 Full Run — 100 questions"
-    ts_display  = ts[:19].replace("T", " ") if ts else "—"
+def _hero(overall, ts, commit, n_q, test_mode, dataset_size=None, models=None) -> str:
+    badge_color = {"PASS": T["green"], "FAIL": T["red"]}.get(overall, T["orange"])
+    of_total    = f" of {dataset_size}" if dataset_size else ""
+    mode_label  = f"⚡ TEST MODE — {n_q}{of_total} questions" if test_mode else f"🚀 Full Run — {n_q} questions"
+    ts_display  = (ts[:19].replace("T", " ") + (" UTC" if ts[19:] in ("+00:00", "Z") else "")) if ts else "—"
+    models      = models or {}
+    stack_label = f"{models.get('answer', 'GPT-4o')} · RAGAS ({models.get('judge', 'gpt-4o-mini')} judge) · Pinecone"
     shadow      = f"0 0 28px {badge_color}66, inset 0 0 16px {badge_color}18"
 
     return f"""
@@ -355,7 +375,7 @@ def _hero(overall, ts, commit, n_q, test_mode) -> str:
                     </span>
                 </div>
                 <p style="color:rgba(255,255,255,0.65); font-size:0.8rem; margin:0 0 14px;">
-                    Automated RAG quality monitoring · GPT-4o · RAGAS · ChromaDB
+                    Automated RAG quality monitoring · {stack_label}
                 </p>
                 <div style="display:flex; gap:22px; flex-wrap:wrap;">
                     <span style="color:rgba(255,255,255,0.5); font-size:0.75rem;">
@@ -391,8 +411,10 @@ def _hero(overall, ts, commit, n_q, test_mode) -> str:
 
 
 def _kpi_card(label, value_str, threshold_str, passed, sublabel="") -> str:
-    border_top = T["green"] if passed else T["red"]
-    status     = ("✓ PASS", T["green"]) if passed else ("✗ FAIL", T["red"])
+    # passed=None → the report has no such gate (e.g. an older run)
+    border_top = T["muted"] if passed is None else T["green"] if passed else T["red"]
+    status     = ("NO DATA", T["muted"]) if passed is None else \
+                 ("✓ PASS", T["green"]) if passed else ("✗ FAIL", T["red"])
     is_dark    = T["name"] == "dark"
     glow       = f"box-shadow: 0 0 14px {border_top}2A, 0 4px 20px rgba(0,0,0,0.35);" if is_dark \
                  else f"box-shadow: 0 2px 12px rgba(0,0,0,0.08);"
@@ -531,26 +553,33 @@ def _trend_fig(df: pd.DataFrame, series: list, title: str, thresholds: list = No
     return fig
 
 
-def _bar_fig(df: pd.DataFrame, col: str, title: str, threshold: float,
-             threshold_label: str, color: str) -> go.Figure:
+def _bar_fig(df: pd.DataFrame, col: str, title: str, threshold: float | None,
+             threshold_label: str, lower_is_better: bool = True) -> go.Figure:
     labels = df["run_timestamp"].dt.strftime("%m-%d %H:%M")
+    values = df[col]
+
+    def _bar_color(v):
+        if pd.isna(v) or threshold is None:
+            return T["muted"]
+        within = v <= threshold if lower_is_better else v >= threshold
+        return T["green"] if within else T["red"]
+
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=labels, y=df[col],
-        marker_color=[T["green"] if v <= threshold else T["red"] for v in df[col]]
-        if "latency" in col or "hallucination" in col or "cost" in col
-        else [T["green"] if v >= threshold else T["red"] for v in df[col]],
-        text=[f"{v:.3f}" for v in df[col]],
+        x=labels, y=values,
+        marker_color=[_bar_color(v) for v in values],
+        text=["" if pd.isna(v) else f"{v:.3f}" for v in values],
         textposition="outside",
         textfont=dict(color=T["text"], size=10),
         hovertemplate=f"<b>{title}</b>: %{{y:.4f}}<extra></extra>",
         name=col,
     ))
-    fig.add_hline(
-        y=threshold, line_dash="dot", line_color=T["gold"], line_width=1.5,
-        annotation_text=f"  {threshold_label}: {threshold}",
-        annotation_font=dict(color=T["gold"], size=10),
-    )
+    if threshold is not None:
+        fig.add_hline(
+            y=threshold, line_dash="dot", line_color=T["gold"], line_width=1.5,
+            annotation_text=f"  {threshold_label}: {threshold}",
+            annotation_font=dict(color=T["gold"], size=10),
+        )
     fig.update_layout(**_chart_layout(title, height=260))
     return fig
 
@@ -565,6 +594,7 @@ _GATE_FORMAT = {
     "context_precision":  ("Context Precision",   lambda v: f"{v:.4f}", ">=", ""),
     "latency_p95":        ("Latency P95",         lambda v: f"{v:.3f}", "<=", "s"),
     "cost_per_query":     ("Cost Per Query",      lambda v: f"{v:.4f}", "<=", "$"),
+    "error_rate":         ("Error Rate",          lambda v: f"{v:.4f}", "<=", ""),
 }
 
 
@@ -651,11 +681,13 @@ def render_sidebar(report) -> None:
             st.markdown(f"🕐 **When:** {ts}")
             st.markdown(f"🔖 **Commit:** `{com}`")
             st.markdown(f"❓ **Questions:** {n}")
-            st.markdown(f"⚡ **Mode:** {'Test (10 Qs)' if mode else 'Full (100 Qs)'}")
+            st.markdown(f"⚡ **Mode:** {'Test' if mode else 'Full'} ({n} Qs)")
             st.markdown(f"✅ **Gates:** {len(p_list)} / {total} passed")
 
             st.divider()
-            if f_list:
+            if report.get("overall_result") == "ERROR":
+                st.error("Run could not complete — see the error above the metrics.")
+            elif f_list:
                 st.error("Failed: " + ", ".join(f_list))
             else:
                 st.success("All gates passed ✓")
@@ -686,18 +718,22 @@ def render_kpi_row(metrics: dict, gates: dict) -> None:
         ("latency_p95_seconds", "latency_p95",
          "Latency P95",        lambda v: f"{v:.3f}s", lambda t: f"≤ {t}s", "95th percentile"),
         ("cost_per_query_usd",  "cost_per_query",
-         "Cost Per Query",     lambda v: f"${v:.4f}", lambda t: f"≤ ${t}", "blended GPT-4o rate"),
+         "Cost Per Query",     lambda v: f"${v:.4f}", lambda t: f"≤ ${t}", "answer model only"),
+        ("error_rate",          "error_rate",
+         "Error Rate",         lambda v: f"{v:.1%}",  lambda t: f"≤ {t:.0%}", "failed RAG calls"),
     ]
 
-    cols = st.columns(6, gap="small")
-    for col, (mkey, gkey, label, vfmt, tfmt, sub) in zip(cols, kpi_defs):
-        val    = metrics.get(mkey)
-        ginfo  = gates.get(gkey, {})
-        passed = ginfo.get("passed", False)
-        thr    = ginfo.get("threshold")
-        v_str  = vfmt(val) if val is not None else "N/A"
-        t_str  = tfmt(thr) if thr is not None else "—"
-        col.html(_kpi_card(label, v_str, t_str, passed, sub))
+    per_row = 4
+    for start in range(0, len(kpi_defs), per_row):
+        cols = st.columns(per_row, gap="small")
+        for col, (mkey, gkey, label, vfmt, tfmt, sub) in zip(cols, kpi_defs[start:start + per_row]):
+            val    = metrics.get(mkey)
+            ginfo  = gates.get(gkey)
+            passed = ginfo.get("passed", False) if ginfo else None
+            thr    = ginfo.get("threshold") if ginfo else None
+            v_str  = vfmt(val) if val is not None else "N/A"
+            t_str  = tfmt(thr) if thr is not None else "—"
+            col.html(_kpi_card(label, v_str, t_str, passed, sub))
 
 
 def render_gate_section(gates: dict) -> None:
@@ -719,7 +755,7 @@ def render_gate_section(gates: dict) -> None:
         _gate_dataframe(gates)
 
 
-def render_trend_charts(history: pd.DataFrame) -> None:
+def render_trend_charts(history: pd.DataFrame, thresholds: dict, hallucination_cutoff: float) -> None:
     st.html(_section_label("Trend Over Time",
         f"Historical metrics across {len(history)} evaluation run(s)"))
 
@@ -727,6 +763,11 @@ def render_trend_charts(history: pd.DataFrame) -> None:
         st.info("Trend charts appear after the first evaluation run. "
                 "Run `python src/run_eval.py` to generate data.")
         return
+
+    def _lines(*specs):
+        # (label, gate, color, dash) → threshold lines, skipping unconfigured gates
+        return [(label, thresholds[gate], color, dash)
+                for label, gate, color, dash in specs if thresholds.get(gate) is not None]
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "📈  Faithfulness & Relevancy",
@@ -744,11 +785,11 @@ def render_trend_charts(history: pd.DataFrame) -> None:
                 ("context_precision",T["purple"], "Context Precision"),
             ],
             title="Faithfulness, Relevancy & Precision",
-            thresholds=[
-                ("faithfulness min",    0.80, T["green"],  "dash"),
-                ("relevancy min",       0.75, T["blue"],   "dot"),
-                ("precision min",       0.60, T["purple"], "longdash"),
-            ],
+            thresholds=_lines(
+                ("faithfulness min", "faithfulness",      T["green"],  "dash"),
+                ("relevancy min",    "answer_relevancy",  T["blue"],   "dot"),
+                ("precision min",    "context_precision", T["purple"], "longdash"),
+            ),
         )
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Dashed lines show minimum thresholds · higher is better for all three")
@@ -756,73 +797,77 @@ def render_trend_charts(history: pd.DataFrame) -> None:
     with tab2:
         fig = _trend_fig(
             history,
-            series=[("hallucination_rate", T["red"], "Hallucination Rate")],
-            title="Hallucination Rate  (1 − avg faithfulness)",
-            thresholds=[("max allowed", 0.05, T["gold"], "dash")],
+            series=[("hallucination_rate", T["red"],    "Hallucination Rate"),
+                    ("error_rate",         T["orange"], "Error Rate")],
+            title=f"Hallucination Rate  (share of answers with faithfulness < {hallucination_cutoff})",
+            thresholds=_lines(("hallucination max", "hallucination_rate", T["gold"], "dash")),
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("Gold dashed line = max threshold (0.05) · lower is better")
+        st.caption(f"Gold dashed line = max hallucination rate ({thresholds.get('hallucination_rate')}) · "
+                   "error rate = questions whose API call failed · lower is better")
 
     with tab3:
         if "latency_p95_seconds" in history.columns:
-            fig = _bar_fig(
-                history, "latency_p95_seconds",
-                "Latency P95 (seconds)", 3.0, "max threshold", T["teal"],
-            )
+            limit = thresholds.get("latency_p95")
+            fig = _bar_fig(history, "latency_p95_seconds", "Latency P95 (seconds)", limit, "max threshold")
             st.plotly_chart(fig, use_container_width=True)
-            st.caption("Green bars = within 3.0 s SLA · Red bars = exceeded")
+            st.caption(f"Green bars = within {limit} s SLA · Red bars = exceeded")
 
     with tab4:
         if "cost_per_query_usd" in history.columns:
-            fig = _bar_fig(
-                history, "cost_per_query_usd",
-                "Cost Per Query (USD)", 0.02, "max threshold", T["orange"],
-            )
+            limit = thresholds.get("cost_per_query")
+            fig = _bar_fig(history, "cost_per_query_usd", "Cost Per Query (USD)", limit, "max threshold")
             st.plotly_chart(fig, use_container_width=True)
-            st.caption("Green bars = within $0.02 budget · Red bars = exceeded")
+            st.caption(f"Green bars = within ${limit} budget · Red bars = exceeded")
 
 
-def render_failures(failures: list) -> None:
+def render_failures(failures: list, failed_count: int, evaluated_count: int, cutoff: float) -> None:
     st.html(_section_label("Sample Failures",
-        "Questions where faithfulness < 0.5"))
+        f"Questions whose API call failed or whose faithfulness is below {cutoff} — worst first"))
+
+    if evaluated_count == 0:
+        st.info("No questions were evaluated in this run.")
+        return
 
     if not failures:
         st.html(
             f'<div style="background:{_hex_rgba(T["green"],0.08)}; '
             f'border:1px solid {_hex_rgba(T["green"],0.3)}; '
             f'border-radius:12px; padding:16px 20px; color:{T["green"]}; font-weight:600;">'
-            f'&#10003; &nbsp; No sample failures — all answers met the faithfulness threshold.'
+            f'&#10003; &nbsp; No failures — every answer met the faithfulness threshold.'
             f'</div>'
         )
         return
 
+    shown = f" (showing the worst {len(failures)})" if failed_count > len(failures) else ""
     st.html(
         f'<div style="background:{_hex_rgba(T["red"],0.08)}; '
         f'border:1px solid {_hex_rgba(T["red"],0.3)}; '
         f'border-radius:10px; padding:12px 16px; color:{T["red"]}; font-weight:600; margin-bottom:12px;">'
-        f'&#9888; &nbsp; {len(failures)} question(s) had low faithfulness scores</div>'
+        f'&#9888; &nbsp; {failed_count} question(s) failed{shown}</div>'
     )
     for i, f in enumerate(failures, 1):
         q     = f.get("question", "N/A")
-        a     = f.get("answer", "N/A")
         faith = f.get("faithfulness")
-        cat   = f.get("category", "—")
+        cat   = f.get("category") or "—"
         err   = f.get("error")
         label = q[:85] + ("…" if len(q) > 85 else "")
 
         with st.expander(f"Failure {i} · [{cat}]  {label}"):
             st.markdown(f"**Question:** {q}")
-            st.markdown(f"**Answer:** {a}")
+            if f.get("expected_answer"):
+                st.markdown(f"**Expected:** {f['expected_answer']}")
+            st.markdown(f"**Answer:** {f.get('answer') or '_(no answer)_'}")
             c1, c2 = st.columns(2)
             c1.metric("Faithfulness", f"{faith:.4f}" if faith is not None else "N/A")
             c2.metric("Category", cat)
             if err:
-                st.error(f"Evaluation error: {err}")
+                st.error(f"Error: {err}")
 
 
 def render_history_table(history: pd.DataFrame) -> None:
     st.html(_section_label("All Evaluation Runs",
-        f"{len(history)} run(s) stored in eval_history.db"))
+        f"{len(history)} most recent run(s) from eval_history.json"))
 
     if history.empty:
         st.info("No run history yet. History accumulates with each evaluation.")
@@ -832,15 +877,16 @@ def render_history_table(history: pd.DataFrame) -> None:
         "run_timestamp", "commit_id", "total_questions",
         "hallucination_rate", "faithfulness", "answer_relevancy",
         "context_precision", "latency_p95_seconds", "cost_per_query_usd",
-        "overall_result",
+        "error_rate", "overall_result",
     ]
     show_cols = [c for c in cols_wanted if c in history.columns]
     disp = history[show_cols].copy().sort_values("run_timestamp", ascending=False)
+    disp["run_timestamp"] = disp["run_timestamp"].dt.strftime("%Y-%m-%d %H:%M UTC")
 
     for fc in ["hallucination_rate", "faithfulness", "answer_relevancy",
-               "context_precision", "latency_p95_seconds", "cost_per_query_usd"]:
+               "context_precision", "latency_p95_seconds", "cost_per_query_usd", "error_rate"]:
         if fc in disp.columns:
-            disp[fc] = disp[fc].round(4)
+            disp[fc] = pd.to_numeric(disp[fc], errors="coerce").round(4)
 
     disp = disp.rename(columns={
         "run_timestamp":       "Timestamp",
@@ -852,6 +898,7 @@ def render_history_table(history: pd.DataFrame) -> None:
         "context_precision":   "Precision",
         "latency_p95_seconds": "Latency P95 (s)",
         "cost_per_query_usd":  "Cost/Q ($)",
+        "error_rate":          "Error Rate",
         "overall_result":      "Result",
     })
 
@@ -860,6 +907,8 @@ def render_history_table(history: pd.DataFrame) -> None:
             return f"background-color:{T['green']}22; color:{T['green']}; font-weight:700;"
         if val == "FAIL":
             return f"background-color:{T['red']}22; color:{T['red']}; font-weight:700;"
+        if val == "ERROR":
+            return f"background-color:{T['orange']}22; color:{T['orange']}; font-weight:700;"
         return ""
 
     styled = (
@@ -897,6 +946,8 @@ def main() -> None:
     gate_results = report.get("gate_results", {})
     gates        = gate_results.get("gates", {})
     failures     = report.get("sample_failures", [])
+    thresholds   = gate_thresholds(gates)
+    cutoff       = report.get("hallucination_faithfulness_threshold", 0.5)
 
     # Hero banner
     st.html(_hero(
@@ -905,25 +956,39 @@ def main() -> None:
         report.get("commit_id", "—"),
         report.get("total_questions", 0),
         report.get("test_mode", False),
+        report.get("dataset_size"),
+        report.get("models"),
     ))
 
-    # KPI cards
-    render_kpi_row(metrics, gates)
+    if report.get("overall_result") == "ERROR":
+        st.error(
+            "**The last evaluation run could not complete — no quality scores were produced.**  \n"
+            f"`{report.get('pipeline_error', 'unknown error')}`"
+            + (f"  \n{report['error_hint']}" if report.get("error_hint") else "")
+        )
+    else:
+        # KPI cards
+        render_kpi_row(metrics, gates)
 
-    st.divider()
+        st.divider()
 
-    # Gate status
-    render_gate_section(gates)
+        # Gate status
+        render_gate_section(gates)
 
     st.divider()
 
     # Trend charts
-    render_trend_charts(history)
+    render_trend_charts(history, thresholds, cutoff)
 
     st.divider()
 
     # Sample failures
-    render_failures(failures)
+    render_failures(
+        failures,
+        report.get("failed_question_count", len(failures)),
+        len(report.get("all_results", [])),
+        cutoff,
+    )
 
     st.divider()
 
@@ -934,7 +999,7 @@ def main() -> None:
     st.html(
         f'<div style="text-align:center; padding:20px 0 8px; '
         f'color:{T["muted"]}; font-size:0.7rem; letter-spacing:0.5px;">'
-        f'ASU LLM Evaluation Pipeline &middot; LangChain &middot; ChromaDB &middot; RAGAS &middot; Streamlit &middot; GPT-4o'
+        f'ASU LLM Evaluation Pipeline &middot; LangChain &middot; Pinecone &middot; RAGAS &middot; Streamlit &middot; OpenAI'
         f'</div>'
     )
 

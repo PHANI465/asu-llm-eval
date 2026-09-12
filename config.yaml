@@ -1,16 +1,27 @@
 quality_gates:
-  hallucination_rate_max: 0.10    # Allow up to 10% — realistic for small knowledge base
+  hallucination_rate_max: 0.10    # Max share of answers flagged as hallucinated (faithfulness below evaluation.hallucination_faithfulness_threshold)
   answer_relevancy_min: 0.75
   faithfulness_min: 0.80
   context_precision_min: 0.60
   latency_p95_max_seconds: 15.0   # Cloud GPT-4o API p95 — 3s was unrealistic
-  cost_per_query_max_usd: 0.02
+  cost_per_query_max_usd: 0.02    # Answer-model cost only (the RAGAS judge is an evaluation cost, reported separately)
+  error_rate_max: 0.10            # Max share of questions where the RAG call itself failed (API error, quota, network)
 
 evaluation:
   model: gpt-4o                    # RAG answer model (quality matters here — keep 4o)
-  judge_model: gpt-4o-mini         # RAGAS evaluation judge (mini is sufficient + 25x cheaper)
+  judge_model: gpt-4o-mini         # RAGAS evaluation judge (mini is sufficient + much cheaper)
   embedding_model: text-embedding-3-small
   chunk_size: 1000
   chunk_overlap: 150
   top_k_retrieval: 8               # Raised from 5 — retrieves more chunks to reduce hallucination
   pinecone_index: asullmeval       # Pinecone cloud vector store index name
+  hallucination_faithfulness_threshold: 0.5   # An answer scoring below this faithfulness counts as hallucinated / failed
+  test_mode_questions: 10          # Questions in a default (non --full) run, sampled evenly across categories
+  judge_max_workers: 8             # Concurrent RAGAS judge requests — lower this if you hit OpenAI rate limits
+
+# USD per 1M tokens. Used for the cost gate and run-cost reporting.
+# Verify against https://openai.com/api/pricing whenever you change models.
+pricing:
+  gpt-4o:                 {input: 2.50, output: 10.00}
+  gpt-4o-mini:            {input: 0.15, output: 0.60}
+  text-embedding-3-small: {input: 0.02, output: 0.00}

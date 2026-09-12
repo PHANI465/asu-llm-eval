@@ -3,61 +3,48 @@
 # ASU LLM Evaluation — RAGAS Scoring Engine
 #
 # Responsibilities:
-#   1. Wrap each RAG result into a RAGAS EvaluationDataset (SingleTurnSample)
+#   1. Wrap RAG results into a RAGAS EvaluationDataset (SingleTurnSample)
 #   2. Score with three metrics:
 #        - Faithfulness                         (no reference required)
 #        - AnswerRelevancy                      (no reference required)
 #        - ContextPrecision / LLMContextPrecisionWithoutReference
 #            -> uses ContextPrecision when a ground-truth reference is given
 #            -> falls back to LLMContextPrecisionWithoutReference otherwise
-#   3. Pass through latency_seconds + token_usage from the RAG result dict
-#   4. Return scored dicts; batch mode never aborts on a single failure
+#   3. Score the whole batch in one RAGAS run, so judge calls run concurrently
+#   4. Skip results whose RAG call failed — an error message is not an answer
+#   5. Track judge token usage + cost; one bad sample never aborts the batch
 # =============================================================================
 
 import math
-import os
 import sys
 
-import yaml
-from dotenv import load_dotenv
 from tabulate import tabulate
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from ragas import evaluate, EvaluationDataset
+from ragas.cost import get_token_usage_for_openai
 from ragas.dataset_schema import SingleTurnSample
-from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
+from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import (
     Faithfulness,
     AnswerRelevancy,
     ContextPrecision,                      # requires reference (ground truth)
     LLMContextPrecisionWithoutReference,   # no reference needed
 )
+from ragas.run_config import RunConfig
+
+from project_config import load_config, require_env, token_cost_usd
 
 # -----------------------------------------------------------------------------
-# 0. Load env vars + project config
+# 0. Settings from config.yaml (shared with the pipeline)
 # -----------------------------------------------------------------------------
 
-_ENV_PATH = os.path.join(os.path.dirname(__file__), "..", ".env")
-load_dotenv(dotenv_path=_ENV_PATH)
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise EnvironmentError(
-        "OPENAI_API_KEY not found. "
-        "Make sure it is set in the .env file at the project root."
-    )
-
-# Read judge_model and embedding_model from config.yaml so a single config
-# change updates both the pipeline and the evaluator.
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
-with open(_CONFIG_PATH, "r") as _f:
-    _CONFIG = yaml.safe_load(_f)
-
-_EVAL_CFG    = _CONFIG["evaluation"]
-_JUDGE_MODEL = _EVAL_CFG["judge_model"]      # gpt-4o-mini  (cheaper judge)
-_EMBED_MODEL = _EVAL_CFG["embedding_model"]  # text-embedding-3-small
+_EVAL_CFG     = load_config()["evaluation"]
+JUDGE_MODEL   = _EVAL_CFG["judge_model"]                  # gpt-4o-mini  (cheaper judge)
+EMBED_MODEL   = _EVAL_CFG["embedding_model"]              # text-embedding-3-small
+JUDGE_WORKERS = _EVAL_CFG.get("judge_max_workers", 8)     # concurrent judge requests
 
 # -----------------------------------------------------------------------------
 # 1. Lazy singleton — judge LLM + embeddings (initialised once per process)
@@ -76,21 +63,15 @@ def _ensure_judge():
 
     if _llm_judge is None:
         print("\n[Evaluator] Initialising RAGAS judge...")
-        print(f"            LLM        : {_JUDGE_MODEL}")
-        print(f"            Embeddings : {_EMBED_MODEL}")
+        print(f"            LLM        : {JUDGE_MODEL}")
+        print(f"            Embeddings : {EMBED_MODEL}")
 
+        api_key = require_env("OPENAI_API_KEY")
         _llm_judge = LangchainLLMWrapper(
-            ChatOpenAI(
-                model=_JUDGE_MODEL,
-                temperature=0,
-                openai_api_key=OPENAI_API_KEY,
-            )
+            ChatOpenAI(model=JUDGE_MODEL, temperature=0, openai_api_key=api_key)
         )
         _embed_judge = LangchainEmbeddingsWrapper(
-            OpenAIEmbeddings(
-                model=_EMBED_MODEL,
-                openai_api_key=OPENAI_API_KEY,
-            )
+            OpenAIEmbeddings(model=EMBED_MODEL, openai_api_key=api_key)
         )
         print("[Evaluator] RAGAS judge ready.\n")
 
@@ -98,7 +79,7 @@ def _ensure_judge():
 
 
 # -----------------------------------------------------------------------------
-# 2. Helper — safe float conversion (handles NaN from RAGAS)
+# 2. Helpers
 # -----------------------------------------------------------------------------
 
 def _safe_float(value) -> float | None:
@@ -113,38 +94,10 @@ def _safe_float(value) -> float | None:
         return None
 
 
-# -----------------------------------------------------------------------------
-# 3. evaluate_single — score one RAG result
-# -----------------------------------------------------------------------------
-
-def evaluate_single(result: dict, reference: str = "") -> dict:
-    """
-    Score a single RAG result dict using RAGAS.
-
-    Parameters
-    ----------
-    result    : dict returned by rag_pipeline.get_answer()
-                Must contain: question, answer, retrieved_chunks,
-                              latency_seconds, token_usage
-    reference : optional ground-truth answer string.
-                When provided, ContextPrecision (with reference) is used.
-                When omitted, LLMContextPrecisionWithoutReference is used.
-
-    Returns
-    -------
-    dict with keys:
-        question, answer,
-        faithfulness, answer_relevancy, context_precision,
-        latency_seconds, token_usage, evaluation_error
-    """
-    question = result["question"]
-    answer   = result["answer"]
-    contexts = result.get("retrieved_chunks") or []   # list[str]
-
-    # Prepare output with safe defaults
-    output = {
-        "question":          question,
-        "answer":            answer,
+def _empty_score(result: dict) -> dict:
+    return {
+        "question":          result["question"],
+        "answer":            result.get("answer", ""),
         "faithfulness":      None,
         "answer_relevancy":  None,
         "context_precision": None,
@@ -153,74 +106,92 @@ def evaluate_single(result: dict, reference: str = "") -> dict:
         "evaluation_error":  None,
     }
 
-    try:
-        llm_judge, embed_judge = _ensure_judge()
 
-        # ----- Build a single RAGAS sample --------------------------------
-        # SingleTurnSample uses the new ragas 0.2.x field names:
-        #   user_input        = the question
-        #   response          = the generated answer
-        #   retrieved_contexts = list of chunk strings used by the RAG
-        #   reference         = ground-truth answer (optional)
-        sample = SingleTurnSample(
-            user_input=question,
-            response=answer,
-            retrieved_contexts=contexts,
-            reference=reference if reference else None,
+def _sum_token_usage(usage) -> tuple[int, int]:
+    """RAGAS returns one TokenUsage, or a list when several models were called."""
+    items = usage if isinstance(usage, list) else [usage]
+    return (
+        sum(u.input_tokens for u in items),
+        sum(u.output_tokens for u in items),
+    )
+
+
+# -----------------------------------------------------------------------------
+# 3. Batch scoring
+# -----------------------------------------------------------------------------
+
+def _score_group(indices, results, references, scored, use_reference, usage) -> None:
+    """Score results[indices] in a single RAGAS run and write into scored[i]."""
+    llm_judge, embed_judge = _ensure_judge()
+
+    samples = [
+        SingleTurnSample(
+            user_input=results[i]["question"],
+            response=results[i]["answer"],
+            retrieved_contexts=results[i].get("retrieved_chunks") or [],
+            reference=references[i] if use_reference else None,
         )
+        for i in indices
+    ]
 
-        dataset = EvaluationDataset(samples=[sample])
+    # With reference    -> ContextPrecision     (output col: "context_precision")
+    # Without reference -> LLMContextPrecisionWithoutReference
+    #                      (output col: "llm_context_precision_without_reference")
+    if use_reference:
+        ctx_precision_metric = ContextPrecision(llm=llm_judge)
+        ctx_precision_col    = "context_precision"
+    else:
+        ctx_precision_metric = LLMContextPrecisionWithoutReference(llm=llm_judge)
+        ctx_precision_col    = "llm_context_precision_without_reference"
 
-        # ----- Choose context-precision metric based on reference ----------
-        # With reference    -> ContextPrecision     (output col: "context_precision")
-        # Without reference -> LLMContextPrecisionWithoutReference
-        #                      (output col: "llm_context_precision_without_reference")
-        if reference:
-            ctx_precision_metric = ContextPrecision(llm=llm_judge)
-            ctx_precision_col    = "context_precision"
-        else:
-            ctx_precision_metric = LLMContextPrecisionWithoutReference(llm=llm_judge)
-            ctx_precision_col    = "llm_context_precision_without_reference"
+    metrics = [
+        Faithfulness(llm=llm_judge),
+        AnswerRelevancy(llm=llm_judge, embeddings=embed_judge),
+        ctx_precision_metric,
+    ]
 
-        metrics = [
-            Faithfulness(llm=llm_judge),
-            AnswerRelevancy(llm=llm_judge, embeddings=embed_judge),
-            ctx_precision_metric,
-        ]
+    print(f"  Scoring {len(indices)} answer(s) "
+          f"{'with' if use_reference else 'without'} reference "
+          f"({JUDGE_WORKERS} concurrent judge requests)...")
 
-        # ----- Run RAGAS evaluation ---------------------------------------
+    try:
         # raise_exceptions=False: individual metric failures return NaN
         # instead of crashing the whole evaluation.
         eval_result = evaluate(
-            dataset=dataset,
+            dataset=EvaluationDataset(samples=samples),
             metrics=metrics,
             llm=llm_judge,
             embeddings=embed_judge,
+            run_config=RunConfig(max_workers=JUDGE_WORKERS),
+            token_usage_parser=get_token_usage_for_openai,
             raise_exceptions=False,
-            show_progress=False,    # suppress ragas internal progress bar
+            show_progress=False,
         )
-
-        # ----- Extract scores from the result DataFrame -------------------
-        df  = eval_result.to_pandas()
-        row = df.iloc[0]
-
-        output["faithfulness"]      = _safe_float(row.get("faithfulness"))
-        output["answer_relevancy"]  = _safe_float(row.get("answer_relevancy"))
-        # Always store under "context_precision" regardless of which variant ran
-        output["context_precision"] = _safe_float(row.get(ctx_precision_col))
-
     except Exception as exc:
-        # Record the error but do NOT re-raise — caller decides what to do
-        output["evaluation_error"] = f"{type(exc).__name__}: {exc}"
+        for i in indices:
+            scored[i]["evaluation_error"] = f"{type(exc).__name__}: {exc}"
+        return
 
-    return output
+    df = eval_result.to_pandas()
+    for row_idx, i in enumerate(indices):
+        row = df.iloc[row_idx]
+        scored[i]["faithfulness"]      = _safe_float(row.get("faithfulness"))
+        scored[i]["answer_relevancy"]  = _safe_float(row.get("answer_relevancy"))
+        # Always store under "context_precision" regardless of which variant ran
+        scored[i]["context_precision"] = _safe_float(row.get(ctx_precision_col))
+
+        if all(scored[i][k] is None for k in ("faithfulness", "answer_relevancy", "context_precision")):
+            scored[i]["evaluation_error"] = "RAGAS returned no scores (all judge calls failed)"
+
+    try:
+        input_tokens, output_tokens = _sum_token_usage(eval_result.total_tokens())
+        usage["input_tokens"]  += input_tokens
+        usage["output_tokens"] += output_tokens
+    except Exception as exc:
+        print(f"  [WARNING] Could not read judge token usage: {exc}")
 
 
-# -----------------------------------------------------------------------------
-# 4. evaluate_batch — score a list of RAG results
-# -----------------------------------------------------------------------------
-
-def evaluate_batch(results: list, references: list = None) -> list:
+def evaluate_batch(results: list, references: list = None) -> tuple[list, dict]:
     """
     Score every item in a list of RAG result dicts.
 
@@ -232,49 +203,75 @@ def evaluate_batch(results: list, references: list = None) -> list:
 
     Returns
     -------
-    list of scored dicts in the same order as input.
-    Individual failures are captured in 'evaluation_error'; the batch continues.
+    (scored, judge_usage)
+      scored      : list of score dicts in the same order as input, with keys
+                    question, answer, faithfulness, answer_relevancy,
+                    context_precision, latency_seconds, token_usage,
+                    evaluation_error
+      judge_usage : {"input_tokens", "output_tokens", "cost_usd"} for the judge
+
+    Results whose RAG call failed (non-empty "error") are not sent to the judge;
+    their scores stay None and evaluation_error explains why.
     """
     if references is None:
         references = [""] * len(results)
+    if len(references) != len(results):
+        raise ValueError(f"Got {len(references)} references for {len(results)} results.")
 
-    scored = []
-    total  = len(results)
+    scored = [_empty_score(r) for r in results]
+    usage  = {"input_tokens": 0, "output_tokens": 0}
 
-    for idx, (result, ref) in enumerate(zip(results, references), start=1):
-        q_preview = result["question"][:72]
-        print(f"Evaluating question {idx}/{total}: \"{q_preview}\"")
-
-        scored_result = evaluate_single(result, reference=ref)
-
-        if scored_result["evaluation_error"]:
-            print(f"  [ERROR] {scored_result['evaluation_error']}")
+    to_score = []
+    for i, r in enumerate(results):
+        if r.get("error"):
+            scored[i]["evaluation_error"] = f"Not scored — RAG call failed: {r['error']}"
         else:
-            f  = scored_result["faithfulness"]
-            ar = scored_result["answer_relevancy"]
-            cp = scored_result["context_precision"]
-            print(
-                f"  Question {idx} scored: "
-                f"faithfulness={f}  "
-                f"answer_relevancy={ar}  "
-                f"context_precision={cp}"
-            )
+            to_score.append(i)
 
-        scored.append(scored_result)
+    # One RAGAS run per metric set: context precision differs with/without reference
+    with_reference    = [i for i in to_score if references[i]]
+    without_reference = [i for i in to_score if not references[i]]
+    for indices, use_reference in ((with_reference, True), (without_reference, False)):
+        if indices:
+            _score_group(indices, results, references, scored, use_reference, usage)
 
-    return scored
+    for idx, s in enumerate(scored, start=1):
+        if s["evaluation_error"]:
+            print(f"  Question {idx}: [ERROR] {s['evaluation_error'][:160]}")
+        else:
+            print(f"  Question {idx}: faithfulness={s['faithfulness']}  "
+                  f"answer_relevancy={s['answer_relevancy']}  "
+                  f"context_precision={s['context_precision']}")
+
+    usage["cost_usd"] = token_cost_usd(JUDGE_MODEL, usage["input_tokens"], usage["output_tokens"])
+    return scored, usage
+
+
+def evaluate_single(result: dict, reference: str = "") -> dict:
+    """
+    Score a single RAG result dict using RAGAS.
+
+    Parameters
+    ----------
+    result    : dict returned by rag_pipeline.get_answer()
+    reference : optional ground-truth answer string.
+                When provided, ContextPrecision (with reference) is used.
+                When omitted, LLMContextPrecisionWithoutReference is used.
+
+    Returns
+    -------
+    score dict — see evaluate_batch()
+    """
+    scored, _ = evaluate_batch([result], [reference])
+    return scored[0]
 
 
 # -----------------------------------------------------------------------------
-# 5. Quick-test entry point
+# 4. Quick-test entry point
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Ensure src/ is on the path so we can import sibling modules
-    _SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-    if _SRC_DIR not in sys.path:
-        sys.path.insert(0, _SRC_DIR)
-
+    import os
     import rag_pipeline
 
     print("=" * 62)
@@ -287,35 +284,18 @@ if __name__ == "__main__":
         "What meal plans are available at ASU?",
     ]
 
-    # ------------------------------------------------------------------
-    # Step 1: Get RAG answers
-    # ------------------------------------------------------------------
     print("\n[Step 1/3] Querying RAG pipeline...")
-    rag_results = []
-    for q in TEST_QUESTIONS:
-        print(f"  >> {q}")
-        rag_results.append(rag_pipeline.get_answer(q))
+    rag_results = [rag_pipeline.get_answer(q) for q in TEST_QUESTIONS]
     print(f"  >> {len(rag_results)} answers retrieved.\n")
 
-    # ------------------------------------------------------------------
-    # Step 2: Score with RAGAS (no reference — using LLMContextPrecisionWithoutReference)
-    # ------------------------------------------------------------------
-    print("[Step 2/3] Running RAGAS evaluations...")
-    scored_results = evaluate_batch(rag_results)
+    print("[Step 2/3] Running RAGAS evaluations (no reference)...")
+    scored_results, judge_usage = evaluate_batch(rag_results)
 
-    # ------------------------------------------------------------------
-    # Step 3: Print summary table + cost comparison
-    # ------------------------------------------------------------------
     print("\n[Step 3/3] Results summary")
-    print("=" * 62)
-
     table_rows = []
-    total_tokens = 0
     for r in scored_results:
         q_short = (r["question"][:42] + "...") if len(r["question"]) > 45 else r["question"]
         err = r["evaluation_error"]
-        total_tokens += r.get("token_usage", 0)
-
         table_rows.append([
             q_short,
             r["faithfulness"]      if r["faithfulness"]      is not None else "N/A",
@@ -329,62 +309,12 @@ if __name__ == "__main__":
     headers = ["Question", "Faithful", "Ans Relev", "Ctx Prec", "Latency", "Tokens", "Error"]
     print(tabulate(table_rows, headers=headers, tablefmt="grid"))
 
-    # Check quality thresholds
-    print("\n[Quality check]")
-    all_good = True
-    for r in scored_results:
-        f  = r.get("faithfulness")
-        ar = r.get("answer_relevancy")
-        if f is not None and f < 0.70:
-            print(f"  WARNING  faithfulness {f:.4f} < 0.70 for: {r['question'][:60]}")
-            all_good = False
-        if ar is not None and ar < 0.70:
-            print(f"  WARNING  answer_relevancy {ar:.4f} < 0.70 for: {r['question'][:60]}")
-            all_good = False
-    if all_good:
-        print("  All scores above 0.70 threshold. Judge model swap is safe.")
-
-    # ------------------------------------------------------------------
-    # Cost comparison: gpt-4o-mini judge vs gpt-4o judge
-    # ------------------------------------------------------------------
-    # Pricing (blended input+output approximations):
-    #   gpt-4o      : ~$5.00 / M tokens  = $0.000005  / token
-    #   gpt-4o-mini : ~$0.20 / M tokens  = $0.0000002 / token  (~25x cheaper)
-    COST_4O_PER_TOKEN   = 0.000005
-    COST_MINI_PER_TOKEN = 0.0000002
-
-    n_q         = len(scored_results)
-    cost_mini   = total_tokens * COST_MINI_PER_TOKEN
-    cost_4o     = total_tokens * COST_4O_PER_TOKEN
-    savings     = cost_4o - cost_mini
-    pct_saved   = (savings / cost_4o * 100) if cost_4o > 0 else 0
-
-    # Project to 10-question TEST_MODE and 100-question full run
-    cost_mini_10   = cost_mini   * (10  / n_q) if n_q else 0
-    cost_4o_10     = cost_4o     * (10  / n_q) if n_q else 0
-    cost_mini_100  = cost_mini   * (100 / n_q) if n_q else 0
-    cost_4o_100    = cost_4o     * (100 / n_q) if n_q else 0
-
-    print(f"\n{'=' * 62}")
-    print(f"  COST COMPARISON  ({n_q} questions, judge tokens only)")
-    print(f"  Judge model used : {_JUDGE_MODEL}")
-    print(f"{'=' * 62}")
-    print(f"  Total tokens used        : {total_tokens:,}")
-    print(f"  Cost (gpt-4o-mini judge) : ${cost_mini:.6f}  for {n_q} Qs")
-    print(f"  Cost (gpt-4o judge)      : ${cost_4o:.6f}  for {n_q} Qs")
-    print(f"  Savings this run         : ${savings:.6f}  ({pct_saved:.0f}% cheaper)")
-    print("-" * 62)
-    print(f"  Projected  10-Q TEST run : mini=${cost_mini_10:.4f}  vs  4o=${cost_4o_10:.4f}")
-    print(f"  Projected 100-Q FULL run : mini=${cost_mini_100:.4f}  vs  4o=${cost_4o_100:.4f}")
-    print(f"  Full-run savings         : ${(cost_4o_100 - cost_mini_100):.4f} per run")
-    print(f"{'=' * 62}")
-
-    # Print full error detail if any
-    errors = [(r["question"], r["evaluation_error"]) for r in scored_results if r["evaluation_error"]]
-    if errors:
-        print("\n[Full error details]")
-        for q, e in errors:
-            print(f"  Q: {q}\n  E: {e}\n")
-
+    answer_cost = sum(r.get("cost_usd") or 0 for r in rag_results)
+    print(f"\n  Answer model ({rag_pipeline.LLM_MODEL}) cost : ${answer_cost:.5f}")
+    print(f"  Judge ({JUDGE_MODEL}) tokens : {judge_usage['input_tokens']:,} in / "
+          f"{judge_usage['output_tokens']:,} out  (${judge_usage['cost_usd'] or 0:.5f})")
     print("\nEvaluation complete.")
-    sys.exit(0)   # explicit exit avoids ChromaDB/RAGAS C-extension segfault on Windows cleanup
+
+    # Hard exit avoids RAGAS / gRPC C-extension segfaults during interpreter cleanup on Windows
+    sys.stdout.flush()
+    os._exit(0)

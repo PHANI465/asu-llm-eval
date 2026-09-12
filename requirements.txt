@@ -2,11 +2,12 @@ langchain==0.3.25
 langchain-openai==0.3.16
 langchain-community==0.3.23
 langchain-pinecone==0.2.13
-pinecone-client==6.0.0
+pinecone==7.3.0
 ragas==0.2.15
 openai==1.82.0
 streamlit==1.45.1
 pandas==2.2.3
+numpy==2.4.6
 plotly==5.24.1
 python-dotenv==1.1.0
 pyyaml==6.0.2

@@ -4,73 +4,74 @@
 #
 # This is the file GitHub Actions runs on every push.
 # It wires together:
-#   rag_pipeline  → answers all golden-dataset questions
+#   rag_pipeline  → answers the selected golden-dataset questions
 #   evaluator     → scores each answer with RAGAS
 #   quality_gates → aggregates metrics + runs PASS/FAIL gates
-#   SQLite        → persists every run to results/eval_history.db
-#   JSON          → writes results/latest_report.json for the dashboard
+#   SQLite        → archives every run to results/eval_history.db (local only)
+#   JSON          → writes results/latest_report.json + eval_history.json
+#                   (committed by CI and read by both dashboards)
 #
-# Exit codes (critical for GitHub Actions):
-#   0 = PASS  → safe to deploy
-#   1 = FAIL  → deployment blocked
+# Usage:
+#   python src/run_eval.py                 # test run: 10 questions across all categories
+#   python src/run_eval.py --full          # every question (or set EVAL_FULL_RUN=true)
+#   python src/run_eval.py --limit 3       # quick, cheap smoke test
+#   python src/run_eval.py --results-dir /tmp/eval   # keep experiments out of results/
+#
+# Result statuses / exit codes (critical for GitHub Actions):
+#   PASS  → exit 0  all quality gates met
+#   FAIL  → exit 1  one or more quality gates missed
+#   ERROR → exit 1  the pipeline could not run (bad key, exhausted quota, crash);
+#                   says nothing about answer quality
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# TEST_MODE flag — flip to False for the full 100-question production run
-# -----------------------------------------------------------------------------
-TEST_MODE = True   # True = first 10 questions only
-
-# =============================================================================
-
+import argparse
 import json
 import os
 import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime
+import traceback
+from datetime import datetime, timezone
 
-from dotenv import load_dotenv
+# rag_pipeline / evaluator pull in LangChain + RAGAS, so they are imported
+# inside the functions that use them: any import-time failure then lands in
+# the crash handler, which still writes an ERROR report for the dashboard.
+import quality_gates
+from project_config import GOLDEN_DATASET_PATH, PROJECT_ROOT, RESULTS_DIR, load_config
 
-# -----------------------------------------------------------------------------
-# 0. Path bootstrap — add src/ to sys.path so sibling modules are importable
-#    whether this script is run as:
-#      python src/run_eval.py       (from project root)
-#      python run_eval.py           (from inside src/)
-# -----------------------------------------------------------------------------
+MAX_HISTORY_RUNS      = 50
+SAMPLE_FAILURE_LIMIT  = 5
+PREFLIGHT_QUESTION    = "What campuses does ASU have?"
 
-_SRC_DIR      = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_SRC_DIR, ".."))
+METRIC_KEYS = [metric_key for metric_key, *_ in quality_gates.GATE_DEFINITIONS]
 
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
 
-# Load .env before any OpenAI-touching imports
-_ENV_PATH = os.path.join(_PROJECT_ROOT, ".env")
-load_dotenv(dotenv_path=_ENV_PATH)
-
-# NOTE: rag_pipeline / evaluator / quality_gates are imported *inside* main()
-# so that any import-time exception (e.g. missing OPENAI_API_KEY) is caught by
-# the top-level handler in __main__ which writes a minimal error report.
-# This guarantees results/latest_report.json always exists after a CI run.
-
-# -----------------------------------------------------------------------------
-# Paths
-# -----------------------------------------------------------------------------
-
-_GOLDEN_DATASET_PATH = os.path.join(_PROJECT_ROOT, "data", "golden_dataset.json")
-_RESULTS_DIR         = os.path.join(_PROJECT_ROOT, "results")
-_DB_PATH             = os.path.join(_RESULTS_DIR, "eval_history.db")
-_REPORT_PATH         = os.path.join(_RESULTS_DIR, "latest_report.json")
-_HISTORY_PATH        = os.path.join(_RESULTS_DIR, "eval_history.json")
-
-# Cost per token: approximate GPT-4o blended rate ($5/M tokens, as specified)
-_COST_PER_TOKEN_USD  = 0.000005
+class PipelineError(RuntimeError):
+    """The evaluation could not run (keys, quota, network) — reported as ERROR, not FAIL."""
 
 
 # =============================================================================
 # Utility helpers
 # =============================================================================
+
+def parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the ASU RAG evaluation and quality gates.")
+    parser.add_argument(
+        "--full", action="store_true",
+        default=os.getenv("EVAL_FULL_RUN", "").strip().lower() in ("1", "true", "yes"),
+        help="Evaluate every golden-dataset question (also enabled by EVAL_FULL_RUN=true).",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="Questions in a non-full run (default: evaluation.test_mode_questions in config.yaml).",
+    )
+    parser.add_argument(
+        "--results-dir", default=RESULTS_DIR,
+        help="Directory for reports (default: results/). Use another path for local experiments.",
+    )
+    return parser.parse_args(argv)
+
 
 def _format_duration(seconds: float) -> str:
     """Convert a raw second count to a readable string like '4m 32s'."""
@@ -82,7 +83,7 @@ def _format_duration(seconds: float) -> str:
 def _get_commit_id() -> str:
     """
     Return the short git commit hash of HEAD.
-    Falls back to 'local' if git is unavailable or the folder is not a repo.
+    Falls back to GITHUB_SHA, then 'local' if git is unavailable.
     """
     try:
         result = subprocess.run(
@@ -90,13 +91,13 @@ def _get_commit_id() -> str:
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=_PROJECT_ROOT,
+            cwd=PROJECT_ROOT,
         )
         if result.returncode == 0:
             return result.stdout.strip()
     except Exception:
         pass
-    return "local"
+    return os.getenv("GITHUB_SHA", "")[:7] or "local"
 
 
 def _safe_pct(val) -> str:
@@ -117,135 +118,159 @@ def _safe_val(val) -> str:
         return "N/A"
 
 
+def error_hint(error: str) -> str:
+    """Translate common infrastructure failures into an actionable hint."""
+    text = (error or "").lower()
+    if "insufficient_quota" in text or "exceeded your current quota" in text:
+        return ("The OpenAI account behind OPENAI_API_KEY has run out of credit. Add credits/billing "
+                "at platform.openai.com (in CI this is the GitHub secret's key).")
+    if "invalid_api_key" in text or "incorrect api key" in text or "unauthorized" in text or "error code: 401" in text:
+        return "An API key was rejected. Check OPENAI_API_KEY and PINECONE_API_KEY."
+    if "not found. set it" in text:
+        return "An API key is missing. Set it in .env locally, or as a repository secret in CI."
+    if "rate limit" in text or "error code: 429" in text:
+        return "Rate limited by OpenAI. Lower evaluation.judge_max_workers in config.yaml or retry later."
+    return ""
+
+
 # =============================================================================
-# Step 1 — Load golden dataset
+# Step 1 — Load golden dataset + choose questions
 # =============================================================================
 
 def load_golden_dataset() -> list:
-    """
-    Load questions + expected answers from data/golden_dataset.json.
-    Applies TEST_MODE slice if enabled.
-    """
-    print("\n[Step 1/5] Loading golden dataset...")
-
-    if not os.path.exists(_GOLDEN_DATASET_PATH):
+    """Load questions + expected answers from data/golden_dataset.json."""
+    if not os.path.exists(GOLDEN_DATASET_PATH):
         raise FileNotFoundError(
-            f"Golden dataset not found at: {_GOLDEN_DATASET_PATH}\n"
+            f"Golden dataset not found at: {GOLDEN_DATASET_PATH}\n"
             "Make sure data/golden_dataset.json is populated."
         )
 
-    with open(_GOLDEN_DATASET_PATH, "r", encoding="utf-8") as f:
+    with open(GOLDEN_DATASET_PATH, "r", encoding="utf-8") as f:
         dataset = json.load(f)
 
     if not dataset:
         raise ValueError("golden_dataset.json is empty.")
-
-    full_count = len(dataset)
-
-    if TEST_MODE:
-        dataset = dataset[:10]
-        print(f"  *** RUNNING IN TEST MODE — 10 questions only (of {full_count}) ***")
-    else:
-        print(f"  Loaded {full_count} questions from golden_dataset.json")
-
-    print(f"  Running evaluation on: {len(dataset)} question(s)")
     return dataset
+
+
+def select_questions(dataset: list, limit: int | None) -> list:
+    """
+    Pick `limit` questions spread evenly across categories (round-robin in
+    dataset order), so a quick run covers every topic instead of only the
+    first category. Deterministic, so runs stay comparable over time.
+    Returns the whole dataset when limit is None or covers everything.
+    """
+    if limit is None or limit >= len(dataset):
+        return list(dataset)
+    if limit < 1:
+        raise ValueError("--limit must be at least 1")
+
+    queues = {}
+    for item in dataset:
+        queues.setdefault(item.get("category", ""), []).append(item)
+
+    picked = []
+    while len(picked) < limit:
+        for queue in queues.values():
+            if queue and len(picked) < limit:
+                picked.append(queue.pop(0))
+
+    order = {id(item): pos for pos, item in enumerate(dataset)}
+    return sorted(picked, key=lambda item: order[id(item)])
 
 
 # =============================================================================
 # Step 2 — RAG pipeline (answer every question)
 # =============================================================================
 
-def run_rag_pipeline(dataset: list) -> list:
+def run_preflight() -> None:
     """
-    Pass every question through rag_pipeline.get_answer().
-    Individual failures are caught, logged, and replaced with an error stub
-    so the rest of the run is never aborted.
+    Ask one throwaway question before the timed run. It absorbs the cold start
+    (documents, chunking, Pinecone sync) so latency numbers are fair, and it
+    stops the run before spending money when keys or quota are broken.
     """
-    total   = len(dataset)
-    results = []
+    import rag_pipeline
+
+    print("\n[Preflight] Checking API access with one warm-up question (not counted in results)...")
+    warmup = rag_pipeline.get_answer(PREFLIGHT_QUESTION)
+    if warmup["error"]:
+        raise PipelineError(f"Preflight question failed, evaluation not started. {warmup['error']}")
+    print(f"[Preflight] OK ({warmup['latency_seconds']}s). Pipeline is warm.")
+
+
+def run_rag_pipeline(questions: list) -> list:
+    """
+    Pass every question through rag_pipeline.get_answer() sequentially (so
+    latency reflects a single user). Returns one record per question that
+    combines golden-dataset fields with the RAG result.
+    """
+    import rag_pipeline
+
+    total   = len(questions)
+    records = []
 
     print(f"\n[Step 2/5] Running RAG pipeline ({total} question(s))...")
 
-    for i, item in enumerate(dataset, start=1):
+    for i, item in enumerate(questions, start=1):
         question = item["question"]
-        print(f"  Answering question {i}/{total}: {question[:70]}...")
+        result   = rag_pipeline.get_answer(question)
 
-        try:
-            result = rag_pipeline.get_answer(question)
-        except Exception as exc:
-            # Log the failure but keep going
-            print(f"  [ERROR] Question {i} failed in RAG pipeline: {exc}")
-            result = {
-                "question":         question,
-                "answer":           f"[RAG ERROR] {exc}",
-                "retrieved_chunks": [],
-                "source_documents": [],
-                "latency_seconds":  0.0,
-                "token_usage":      0,
-            }
+        status = f"ERROR {result['error'][:120]}" if result["error"] else f"ok {result['latency_seconds']}s"
+        print(f"  [{i}/{total}] {question[:70]}  -> {status}")
 
-        # Attach golden-dataset metadata for later reporting
-        result["golden_id"]  = item.get("id")
-        result["category"]   = item.get("category", "")
-        result["difficulty"] = item.get("difficulty", "")
-        results.append(result)
+        records.append({
+            "id":              item.get("id"),
+            "category":        item.get("category", ""),
+            "difficulty":      item.get("difficulty", ""),
+            "expected_answer": item.get("expected_answer", ""),
+            **result,
+        })
 
-    return results
+    errors = [r for r in records if r["error"]]
+    if errors and len(errors) == total:
+        raise PipelineError(f"All {total} questions failed in the RAG step. First error: {errors[0]['error']}")
+    if errors:
+        print(f"  [WARNING] {len(errors)}/{total} question(s) failed in the RAG step (see error_rate gate).")
+
+    return records
 
 
 # =============================================================================
 # Step 3 — RAGAS evaluation (score every answer)
 # =============================================================================
 
-def run_evaluation(rag_results: list, dataset: list) -> list:
+def run_evaluation(records: list) -> dict:
     """
-    Score every RAG result using evaluator.evaluate_batch().
-    Ground-truth references are pulled from the golden dataset's
-    expected_answer field so that ContextPrecision (with reference) is used.
-
-    Falls back to individual evaluate_single() calls if the batch call
-    raises an unexpected exception.
+    Score every record with evaluator.evaluate_batch(), using each question's
+    expected_answer as the reference so ContextPrecision (with reference) is
+    used. Scores are merged into the records in place.
+    Returns the judge's token usage / cost.
     """
-    print(f"\n[Step 3/5] Scoring {len(rag_results)} answer(s) with RAGAS...")
+    import evaluator
 
-    # Build the reference list in the same order as rag_results
-    references = [item.get("expected_answer", "") for item in dataset]
+    print(f"\n[Step 3/5] Scoring {len(records)} answer(s) with RAGAS...")
 
-    try:
-        scored = evaluator.evaluate_batch(rag_results, references=references)
-
-    except Exception as batch_exc:
-        print(f"  [WARNING] Batch evaluation raised: {batch_exc}")
-        print("  Falling back to question-by-question evaluation...")
-        scored = []
-        for i, (result, ref) in enumerate(zip(rag_results, references), start=1):
-            print(f"  Evaluating question {i}/{len(rag_results)} (fallback)...")
-            try:
-                s = evaluator.evaluate_single(result, reference=ref)
-            except Exception as single_exc:
-                s = {
-                    **result,
-                    "faithfulness":      None,
-                    "answer_relevancy":  None,
-                    "context_precision": None,
-                    "evaluation_error":  f"{type(single_exc).__name__}: {single_exc}",
-                }
-            scored.append(s)
-
-    return scored
+    scores, judge_usage = evaluator.evaluate_batch(
+        records, references=[r["expected_answer"] for r in records]
+    )
+    for record, score in zip(records, scores):
+        record.update({
+            "faithfulness":      score["faithfulness"],
+            "answer_relevancy":  score["answer_relevancy"],
+            "context_precision": score["context_precision"],
+            "evaluation_error":  score["evaluation_error"],
+        })
+    return judge_usage
 
 
 # =============================================================================
-# Step 4 — Aggregate metrics
+# Steps 4 + 5 — Aggregate metrics, quality gates
 # =============================================================================
 
-def build_metrics(scored_results: list) -> dict:
-    """
-    Delegate to quality_gates.compute_aggregate_metrics() and log the results.
-    """
+def build_metrics(records: list) -> dict:
+    """Delegate to quality_gates.compute_aggregate_metrics() and log the results."""
     print("\n[Step 4/5] Computing aggregate metrics...")
-    metrics = quality_gates.compute_aggregate_metrics(scored_results)
+    metrics = quality_gates.compute_aggregate_metrics(records)
 
     print("  Aggregated metrics:")
     for key, val in metrics.items():
@@ -253,10 +278,6 @@ def build_metrics(scored_results: list) -> dict:
 
     return metrics
 
-
-# =============================================================================
-# Step 5 — Quality gates
-# =============================================================================
 
 def run_quality_gates(metrics: dict) -> dict:
     """Run quality gates and print the gate report."""
@@ -267,248 +288,252 @@ def run_quality_gates(metrics: dict) -> dict:
 
 
 # =============================================================================
-# Save results — SQLite
+# Report building
 # =============================================================================
 
-def save_to_database(
-    run_timestamp: str,
-    commit_id: str,
-    dataset: list,
-    metrics: dict,
-    gate_results: dict,
-) -> None:
-    """
-    Persist one row per evaluation run to results/eval_history.db.
-    Creates the database and table automatically on first run.
-    """
-    os.makedirs(_RESULTS_DIR, exist_ok=True)
-
-    conn = sqlite3.connect(_DB_PATH)
-    try:
-        # Create table if it doesn't exist yet
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS eval_runs (
-                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_timestamp       TEXT,
-                commit_id           TEXT,
-                total_questions     INTEGER,
-                hallucination_rate  REAL,
-                answer_relevancy    REAL,
-                faithfulness        REAL,
-                context_precision   REAL,
-                latency_p95_seconds REAL,
-                cost_per_query_usd  REAL,
-                overall_result      TEXT,
-                failed_gates        TEXT
-            )
-        """)
-
-        conn.execute(
-            """
-            INSERT INTO eval_runs (
-                run_timestamp, commit_id, total_questions,
-                hallucination_rate, answer_relevancy, faithfulness,
-                context_precision, latency_p95_seconds, cost_per_query_usd,
-                overall_result, failed_gates
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_timestamp,
-                commit_id,
-                len(dataset),
-                metrics.get("hallucination_rate"),
-                metrics.get("answer_relevancy"),
-                metrics.get("faithfulness"),
-                metrics.get("context_precision"),
-                metrics.get("latency_p95_seconds"),
-                metrics.get("cost_per_query_usd"),
-                gate_results["overall"],
-                ", ".join(gate_results.get("failed_gates", [])),
-            ),
-        )
-        conn.commit()
-
-        # Confirm row was written
-        row = conn.execute(
-            "SELECT id FROM eval_runs WHERE run_timestamp = ?",
-            (run_timestamp,)
-        ).fetchone()
-        print(f"  [OK] eval_history.db — row inserted (id={row[0]}, "
-              f"timestamp={run_timestamp})")
-
-    finally:
-        conn.close()
+def question_passed(record: dict, threshold: float) -> bool:
+    """A question passes when its RAG call succeeded and its answer is faithful enough."""
+    faith = record.get("faithfulness")
+    return not record.get("error") and faith is not None and faith >= threshold
 
 
-# =============================================================================
-# Save results — JSON report
-# =============================================================================
+def build_report(run_meta: dict, records: list, metrics: dict, gate_results: dict, judge_usage: dict) -> dict:
+    """Assemble the full JSON report consumed by CI and both dashboards."""
+    threshold = quality_gates.hallucination_threshold()
 
-def save_json_report(
-    run_timestamp: str,
-    commit_id: str,
-    dataset: list,
-    metrics: dict,
-    gate_results: dict,
-    scored_results: list,
-    total_cost_usd: float = 0.0,
-    total_tokens: int = 0,
-) -> None:
-    """
-    Write a full-detail JSON report to results/latest_report.json.
-    Includes all_results (every question scored), total_cost_usd,
-    and total_tokens for the React dashboard.
-    """
-    os.makedirs(_RESULTS_DIR, exist_ok=True)
-
-    # ── all_results — every question with its scores ──────────────────────────
-    # NOTE: evaluate_single() creates a fresh dict with only RAGAS score fields,
-    # so golden_id / category / difficulty are taken from dataset[i] directly.
     all_results = []
-    for i, r in enumerate(scored_results):
-        item  = dataset[i] if i < len(dataset) else {}
-        faith = r.get("faithfulness")
+    for r in records:
         all_results.append({
-            "id":                item.get("id"),
+            "id":                r.get("id"),
             "question":          r.get("question", ""),
             "answer":            (r.get("answer") or "")[:500],
-            "category":          item.get("category", ""),
-            "difficulty":        item.get("difficulty", ""),
-            "faithfulness":      faith,
+            "category":          r.get("category", ""),
+            "difficulty":        r.get("difficulty", ""),
+            "faithfulness":      r.get("faithfulness"),
             "answer_relevancy":  r.get("answer_relevancy"),
             "context_precision": r.get("context_precision"),
             "latency_seconds":   r.get("latency_seconds"),
             "token_usage":       r.get("token_usage"),
-            "passed":            faith is not None and faith >= 0.5,
+            "cost_usd":          r.get("cost_usd"),
+            "error":             r.get("error") or r.get("evaluation_error"),
+            "passed":            question_passed(r, threshold),
         })
 
-    # ── sample_failures — up to 5 low-faithfulness examples ──────────────────
-    sample_failures = []
-    for r in scored_results:
-        f = r.get("faithfulness")
-        if f is not None and f < 0.5:
-            sample_failures.append({
-                "question":    r["question"],
-                "answer":      (r.get("answer") or "")[:300],
-                "faithfulness": f,
-                "category":    r.get("category", ""),
-                "error":       r.get("evaluation_error"),
-            })
-        if len(sample_failures) >= 5:
-            break
+    # Failed questions, worst first: RAG errors, then unscored, then lowest faithfulness
+    failed = [r for r in records if not question_passed(r, threshold)]
+    failed.sort(key=lambda r: (
+        0 if r.get("error") else 1,
+        r["faithfulness"] if r.get("faithfulness") is not None else -1.0,
+    ))
+    sample_failures = [
+        {
+            "id":               r.get("id"),
+            "question":         r.get("question", ""),
+            "expected_answer":  r.get("expected_answer", ""),
+            "answer":           (r.get("answer") or "")[:500],
+            "faithfulness":     r.get("faithfulness"),
+            "answer_relevancy": r.get("answer_relevancy"),
+            "category":         r.get("category", ""),
+            "difficulty":       r.get("difficulty", ""),
+            "error":            r.get("error") or r.get("evaluation_error"),
+        }
+        for r in failed[:SAMPLE_FAILURE_LIMIT]
+    ]
 
-    report = {
-        "run_timestamp":   run_timestamp,
-        "commit_id":       commit_id,
-        "total_questions": len(dataset),
-        "test_mode":       TEST_MODE,
-        "total_cost_usd":  total_cost_usd,
-        "total_tokens":    total_tokens,
-        "metrics":         metrics,
+    answer_tokens = sum(r.get("token_usage") or 0 for r in records)
+    answer_cost   = sum(r.get("cost_usd") or 0 for r in records)
+    judge_tokens  = (judge_usage.get("input_tokens") or 0) + (judge_usage.get("output_tokens") or 0)
+    judge_cost    = judge_usage.get("cost_usd") or 0
+
+    return {
+        "run_timestamp":         run_meta["run_timestamp"],
+        "commit_id":             run_meta["commit_id"],
+        "total_questions":       len(records),
+        "dataset_size":          run_meta.get("dataset_size"),
+        "test_mode":             not run_meta["full_run"],
+        "models":                run_meta.get("models", {}),
+        "hallucination_faithfulness_threshold": threshold,
+        "total_cost_usd":        round(answer_cost + judge_cost, 6),
+        "answer_cost_usd":       round(answer_cost, 6),
+        "judge_cost_usd":        round(judge_cost, 6),
+        "total_tokens":          answer_tokens + judge_tokens,
+        "metrics":               metrics,
         "gate_results": {
             "overall":      gate_results["overall"],
             "passed_gates": gate_results["passed_gates"],
             "failed_gates": gate_results["failed_gates"],
             "gates":        gate_results["gates"],
         },
-        "overall_result":  gate_results["overall"],
-        "failed_gates":    gate_results["failed_gates"],
-        "sample_failures": sample_failures,
-        "all_results":     all_results,
+        "overall_result":        gate_results["overall"],
+        "failed_gates":          gate_results["failed_gates"],
+        "failed_question_count": len(failed),
+        "sample_failures":       sample_failures,
+        "all_results":           all_results,
     }
 
-    with open(_REPORT_PATH, "w", encoding="utf-8") as f:
+
+def build_error_report(run_meta: dict, error: str, tb: str) -> dict:
+    """Minimal report for a run that could not complete, so CI and dashboards still show why."""
+    return {
+        "run_timestamp":         run_meta["run_timestamp"],
+        "commit_id":             run_meta["commit_id"],
+        "total_questions":       0,
+        "dataset_size":          run_meta.get("dataset_size"),
+        "test_mode":             not run_meta["full_run"],
+        "models":                run_meta.get("models", {}),
+        "total_cost_usd":        0.0,
+        "total_tokens":          0,
+        "overall_result":        "ERROR",
+        "failed_gates":          [],
+        "metrics":               {},
+        "gate_results": {
+            "overall":      "ERROR",
+            "passed_gates": [],
+            "failed_gates": [],
+            "gates":        {},
+        },
+        "failed_question_count": 0,
+        "sample_failures":       [],
+        "all_results":           [],
+        "pipeline_error":        error,
+        "error_hint":            error_hint(error),
+        "traceback":             tb,
+    }
+
+
+def history_row(report: dict) -> dict:
+    """Flat per-run summary shared by eval_history.json and the SQLite archive."""
+    metrics = report.get("metrics") or {}
+    return {
+        "run_timestamp":   report["run_timestamp"],
+        "commit_id":       report["commit_id"],
+        "total_questions": report["total_questions"],
+        "test_mode":       report["test_mode"],
+        **{key: metrics.get(key) for key in METRIC_KEYS},
+        "total_cost_usd":  report.get("total_cost_usd"),
+        "total_tokens":    report.get("total_tokens"),
+        "overall_result":  report["overall_result"],
+        "failed_gates":    report.get("failed_gates", []),
+        "pipeline_error":  report.get("pipeline_error"),
+    }
+
+
+# =============================================================================
+# Save results
+# =============================================================================
+
+_DB_COLUMNS = [
+    ("run_timestamp",       "TEXT"),
+    ("commit_id",           "TEXT"),
+    ("total_questions",     "INTEGER"),
+    ("hallucination_rate",  "REAL"),
+    ("answer_relevancy",    "REAL"),
+    ("faithfulness",        "REAL"),
+    ("context_precision",   "REAL"),
+    ("latency_p95_seconds", "REAL"),
+    ("cost_per_query_usd",  "REAL"),
+    ("overall_result",      "TEXT"),
+    ("failed_gates",        "TEXT"),
+    ("error_rate",          "REAL"),
+    ("total_cost_usd",      "REAL"),
+    ("test_mode",           "INTEGER"),
+    ("pipeline_error",      "TEXT"),
+]
+
+
+def save_to_database(row: dict, results_dir: str) -> None:
+    """
+    Append one run to eval_history.db (a local, gitignored archive).
+    Creates the table on first run and adds columns introduced since.
+    """
+    os.makedirs(results_dir, exist_ok=True)
+
+    conn = sqlite3.connect(os.path.join(results_dir, "eval_history.db"))
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS eval_runs (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+        existing = {info[1] for info in conn.execute("PRAGMA table_info(eval_runs)")}
+        for name, sql_type in _DB_COLUMNS:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE eval_runs ADD COLUMN {name} {sql_type}")
+
+        values = {
+            **{name: row.get(name) for name, _ in _DB_COLUMNS},
+            "failed_gates": ", ".join(row.get("failed_gates") or []),
+            "test_mode":    int(bool(row.get("test_mode"))),
+        }
+        names  = [name for name, _ in _DB_COLUMNS]
+        cursor = conn.execute(
+            f"INSERT INTO eval_runs ({', '.join(names)}) VALUES ({', '.join('?' for _ in names)})",
+            [values[name] for name in names],
+        )
+        conn.commit()
+        print(f"  [OK] eval_history.db — row inserted (id={cursor.lastrowid})")
+    finally:
+        conn.close()
+
+
+def save_json_report(report: dict, results_dir: str) -> None:
+    """Write the full report to latest_report.json."""
+    os.makedirs(results_dir, exist_ok=True)
+    path = os.path.join(results_dir, "latest_report.json")
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
+    print(f"  [OK] latest_report.json — {len(report['all_results'])} result(s) -> {path}")
 
-    print(f"  [OK] latest_report.json — {len(all_results)} results saved to {_REPORT_PATH}")
 
+def save_history_json(row: dict, results_dir: str) -> None:
+    """Append a run summary to eval_history.json, keeping the most recent runs."""
+    os.makedirs(results_dir, exist_ok=True)
+    path = os.path.join(results_dir, "eval_history.json")
 
-# =============================================================================
-# Save results — History JSON
-# =============================================================================
-
-def save_history_json(
-    run_timestamp: str,
-    commit_id: str,
-    dataset: list,
-    metrics: dict,
-    gate_results: dict,
-    total_cost_usd: float = 0.0,
-    total_tokens: int = 0,
-) -> None:
-    """
-    Append a summary row to results/eval_history.json.
-    Creates the file on first run.  Keeps the most recent 50 runs.
-    """
-    os.makedirs(_RESULTS_DIR, exist_ok=True)
-
-    # Load existing history or start fresh
-    if os.path.exists(_HISTORY_PATH):
+    history = {"runs": []}
+    if os.path.exists(path):
         try:
-            with open(_HISTORY_PATH, "r", encoding="utf-8") as f:
-                history = json.load(f)
-            if not isinstance(history.get("runs"), list):
-                history = {"runs": []}
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded.get("runs"), list):
+                history = loaded
         except Exception as exc:
             print(f"  [WARNING] Could not read eval_history.json: {exc} — starting fresh.")
-            history = {"runs": []}
-    else:
-        history = {"runs": []}
 
-    # Build new run row
-    new_run = {
-        "run_timestamp":       run_timestamp,
-        "commit_id":           commit_id,
-        "total_questions":     len(dataset),
-        "test_mode":           TEST_MODE,
-        "hallucination_rate":  metrics.get("hallucination_rate"),
-        "answer_relevancy":    metrics.get("answer_relevancy"),
-        "faithfulness":        metrics.get("faithfulness"),
-        "context_precision":   metrics.get("context_precision"),
-        "latency_p95_seconds": metrics.get("latency_p95_seconds"),
-        "cost_per_query_usd":  metrics.get("cost_per_query_usd"),
-        "total_cost_usd":      total_cost_usd,
-        "total_tokens":        total_tokens,
-        "overall_result":      gate_results["overall"],
-        "failed_gates":        gate_results.get("failed_gates", []),
-    }
+    history["runs"] = (history["runs"] + [row])[-MAX_HISTORY_RUNS:]
 
-    history["runs"].append(new_run)
-
-    # Keep only the most recent 50 runs
-    if len(history["runs"]) > 50:
-        history["runs"] = history["runs"][-50:]
-
-    with open(_HISTORY_PATH, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
+    print(f"  [OK] eval_history.json — {len(history['runs'])} run(s) total -> {path}")
 
-    n = len(history["runs"])
-    print(f"  [OK] eval_history.json — {n} run(s) total -> {_HISTORY_PATH}")
+
+def save_all(report: dict, results_dir: str) -> None:
+    """Write every output; one failing writer does not prevent the others."""
+    print("\n[Saving results...]")
+    row = history_row(report)
+    for writer, target in (
+        (save_json_report,  report),
+        (save_history_json, row),
+        (save_to_database,  row),
+    ):
+        try:
+            writer(target, results_dir)
+        except Exception as exc:
+            print(f"  [WARNING] {writer.__name__} failed: {exc}")
 
 
 # =============================================================================
 # Final summary
 # =============================================================================
 
-def print_final_summary(
-    dataset: list,
-    elapsed: float,
-    commit_id: str,
-    metrics: dict,
-    gate_results: dict,
-) -> None:
+def print_final_summary(report: dict, elapsed: float) -> None:
     """Print the human-readable evaluation summary to stdout."""
-    DIVIDER  = "=" * 44
-    overall  = gate_results["overall"]
-    duration = _format_duration(elapsed)
+    DIVIDER = "=" * 44
+    metrics = report["metrics"]
 
     print(f"\n{DIVIDER}")
     print("EVALUATION COMPLETE")
     print(DIVIDER)
-    print(f"  Total questions : {len(dataset)}"
-          + (" (TEST MODE)" if TEST_MODE else ""))
-    print(f"  Time taken      : {duration}")
-    print(f"  Commit          : {commit_id}")
+    print(f"  Questions       : {report['total_questions']} of {report['dataset_size']}"
+          + (" (test mode)" if report["test_mode"] else ""))
+    print(f"  Time taken      : {_format_duration(elapsed)}")
+    print(f"  Commit          : {report['commit_id']}")
     print(DIVIDER)
     print(f"  Hallucination   : {_safe_pct(metrics.get('hallucination_rate'))}")
     print(f"  Answer Relevancy: {_safe_val(metrics.get('answer_relevancy'))}")
@@ -516,14 +541,16 @@ def print_final_summary(
     print(f"  Context Prec    : {_safe_val(metrics.get('context_precision'))}")
     print(f"  Latency p95     : {_safe_val(metrics.get('latency_p95_seconds'))}s")
     print(f"  Cost per query  : ${metrics.get('cost_per_query_usd') or 0:.4f}")
+    print(f"  Error rate      : {_safe_pct(metrics.get('error_rate'))}")
+    print(f"  Run cost        : ${report['total_cost_usd']:.4f}  (answers ${report['answer_cost_usd']:.4f}"
+          f" + judge ${report['judge_cost_usd']:.4f})")
     print(DIVIDER)
 
-    if overall == "PASS":
+    if report["overall_result"] == "PASS":
         print("  OVERALL: PASS - Safe to deploy")
     else:
-        failed = ", ".join(gate_results["failed_gates"])
         print("  OVERALL: FAIL - Deployment blocked")
-        print(f"  Failed gates : {failed}")
+        print(f"  Failed gates : {', '.join(report['failed_gates'])}")
 
     print(DIVIDER)
 
@@ -532,164 +559,104 @@ def print_final_summary(
 # Main
 # =============================================================================
 
-def main() -> int:
+def new_run_meta(args: argparse.Namespace) -> dict:
+    return {
+        "run_timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "commit_id":     _get_commit_id(),
+        "full_run":      args.full,
+    }
+
+
+def main(args: argparse.Namespace, run_meta: dict) -> int:
     """
     Orchestrate the full evaluation pipeline.
-    Returns 0 (PASS) or 1 (FAIL) for GitHub Actions.
+    Returns 0 (PASS) or 1 (FAIL). Raises on errors that prevent a meaningful run.
     """
-    # Pipeline module imports are here (not at file top) so that any import-time
-    # error (missing API key, bad dep) is caught by the __main__ crash handler.
-    # global declarations make the names visible to all helper functions in this
-    # module (run_rag_pipeline, run_evaluation, build_metrics, etc.).
-    global rag_pipeline, evaluator, quality_gates
-    import rag_pipeline
-    import evaluator
-    import quality_gates
-
-    run_timestamp = datetime.now().isoformat(timespec="seconds")
-    commit_id     = _get_commit_id()
-    run_start     = time.perf_counter()
-
-    # ── Header ────────────────────────────────────────────────────────────────
-    DIVIDER = "=" * 44
-    print(f"\n{DIVIDER}")
-    mode_label = "TEST MODE — 10 questions" if TEST_MODE else "FULL RUN — 100 questions"
-    print(f"  ASU LLM Evaluation Run [{mode_label}]")
-    print(f"  Timestamp : {run_timestamp}")
-    print(f"  Commit    : {commit_id}")
-    print(DIVIDER)
-
-    # ── Warmup — absorb cold-start cost before timing begins ─────────────────
-    # The first call to rag_pipeline.get_answer() pays a one-time price:
-    #   • loads all 6 .txt documents from disk
-    #   • splits them into chunks
-    #   • loads or builds the ChromaDB vectorstore
-    # This can add 4–6 s to the first question, inflating the p95 latency.
-    # Running one throwaway question here means every timed question hits a
-    # warm vectorstore and the timing results are fair and reproducible.
-    print("\n[Warmup] Warming up RAG pipeline (not counted in results)...")
-    try:
-        rag_pipeline.get_answer("warmup")
-        print("[Warmup] Pipeline is warm. Starting timed evaluation.\n")
-    except Exception as warmup_exc:
-        print(f"[Warmup] Warning — warmup query failed: {warmup_exc}")
-        print("[Warmup] Continuing anyway — first question may be slower.\n")
+    run_start = time.perf_counter()
+    eval_cfg  = load_config()["evaluation"]
+    run_meta["models"] = {
+        "answer":    eval_cfg["model"],
+        "judge":     eval_cfg["judge_model"],
+        "embedding": eval_cfg["embedding_model"],
+    }
 
     # ── Step 1: Load dataset ───────────────────────────────────────────────────
     dataset = load_golden_dataset()
+    run_meta["dataset_size"] = len(dataset)
+    limit     = None if args.full else (args.limit or eval_cfg.get("test_mode_questions", 10))
+    questions = select_questions(dataset, limit)
 
-    # ── Step 2: RAG pipeline ──────────────────────────────────────────────────
-    rag_start   = time.perf_counter()
-    rag_results = run_rag_pipeline(dataset)
-    rag_elapsed = time.perf_counter() - rag_start
-    print(f"\n  RAG pipeline done — {len(rag_results)} answers in {_format_duration(rag_elapsed)}.")
+    DIVIDER = "=" * 44
+    mode_label = f"FULL RUN — {len(questions)} questions" if args.full \
+        else f"TEST MODE — {len(questions)} of {len(dataset)} questions"
+    print(f"\n{DIVIDER}")
+    print(f"  ASU LLM Evaluation Run [{mode_label}]")
+    print(f"  Timestamp : {run_meta['run_timestamp']}")
+    print(f"  Commit    : {run_meta['commit_id']}")
+    print(DIVIDER)
+
+    categories = sorted({q.get("category", "") for q in questions})
+    print(f"\n[Step 1/5] Loaded {len(dataset)} questions; evaluating {len(questions)} "
+          f"across {len(categories)} categories: {', '.join(categories)}")
+
+    # ── Preflight + Step 2: RAG pipeline ───────────────────────────────────────
+    run_preflight()
+
+    rag_start = time.perf_counter()
+    records   = run_rag_pipeline(questions)
+    print(f"\n  RAG pipeline done — {len(records)} answers in {_format_duration(time.perf_counter() - rag_start)}.")
 
     # ── Step 3: RAGAS evaluation ──────────────────────────────────────────────
-    eval_start     = time.perf_counter()
-    scored_results = run_evaluation(rag_results, dataset)
-    eval_elapsed   = time.perf_counter() - eval_start
-    print(f"\n  RAGAS evaluation done — {len(scored_results)} scored in {_format_duration(eval_elapsed)}.")
+    eval_start  = time.perf_counter()
+    judge_usage = run_evaluation(records)
+    print(f"\n  RAGAS evaluation done in {_format_duration(time.perf_counter() - eval_start)}.")
 
-    # ── Step 4: Aggregate ─────────────────────────────────────────────────────
-    metrics = build_metrics(scored_results)
-
-    # ── Step 5: Quality gates ─────────────────────────────────────────────────
+    # ── Steps 4 + 5: Aggregate + quality gates ────────────────────────────────
+    metrics      = build_metrics(records)
     gate_results = run_quality_gates(metrics)
 
-    # ── Save results ──────────────────────────────────────────────────────────
-    print("\n[Saving results...]")
-
-    # Compute run-level totals for report and history
-    _run_total_tokens   = sum(r.get("token_usage", 0) or 0 for r in scored_results)
-    _run_total_cost_usd = round(_run_total_tokens * _COST_PER_TOKEN_USD, 6)
-
-    try:
-        save_to_database(run_timestamp, commit_id, dataset, metrics, gate_results)
-    except Exception as exc:
-        print(f"  [WARNING] Could not save to SQLite: {exc}")
-
-    try:
-        save_json_report(
-            run_timestamp, commit_id, dataset,
-            metrics, gate_results, scored_results,
-            total_cost_usd=_run_total_cost_usd,
-            total_tokens=_run_total_tokens,
-        )
-    except Exception as exc:
-        print(f"  [WARNING] Could not save JSON report: {exc}")
-
-    try:
-        save_history_json(
-            run_timestamp, commit_id, dataset,
-            metrics, gate_results,
-            total_cost_usd=_run_total_cost_usd,
-            total_tokens=_run_total_tokens,
-        )
-    except Exception as exc:
-        print(f"  [WARNING] Could not save history JSON: {exc}")
-
-    # ── Final summary ─────────────────────────────────────────────────────────
-    total_elapsed = time.perf_counter() - run_start
-    print(f"\n  Total cost   : ${_run_total_cost_usd:.4f}  |  Total tokens: {_run_total_tokens:,}")
-    print_final_summary(dataset, total_elapsed, commit_id, metrics, gate_results)
+    # ── Save + summarise ──────────────────────────────────────────────────────
+    report = build_report(run_meta, records, metrics, gate_results, judge_usage)
+    save_all(report, args.results_dir)
+    print_final_summary(report, time.perf_counter() - run_start)
 
     return 0 if gate_results["overall"] == "PASS" else 1
 
 
+def handle_crash(exc: Exception, run_meta: dict, results_dir: str) -> int:
+    """
+    Safety net — always write an ERROR report so the CI artifact upload,
+    step summary and dashboards show what went wrong.
+    """
+    error = f"{type(exc).__name__}: {exc}"
+    hint  = error_hint(error)
+    tb    = traceback.format_exc()
+
+    print(f"\n{'=' * 44}")
+    print("  OVERALL: ERROR - the evaluation could not run")
+    print(f"  Error : {error}")
+    if hint:
+        print(f"  Hint  : {hint}")
+    print(f"{'=' * 44}")
+    if not isinstance(exc, PipelineError):
+        print(tb)
+
+    save_all(build_error_report(run_meta, error, tb), results_dir)
+    return 1
+
+
 if __name__ == "__main__":
+    # Never crash on characters the console encoding can't show (Windows cp1252)
+    for _stream in (sys.stdout, sys.stderr):
+        _stream.reconfigure(errors="replace")
+
+    _args     = parse_args()
+    _run_meta = new_run_meta(_args)
+
     try:
-        exit_code = main()
-
-    except Exception as exc:
-        # ----------------------------------------------------------------
-        # Crash safety net — always write a minimal report so the CI
-        # artifact upload step has a file to upload, even if the pipeline
-        # crashes before reaching save_json_report().
-        # ----------------------------------------------------------------
-        import traceback as _tb
-
-        _ts = datetime.now().isoformat(timespec="seconds")
-        _err_str = f"{type(exc).__name__}: {exc}"
-        _tb_str  = _tb.format_exc()
-
-        print(f"\n{'=' * 44}")
-        print(f"  [FATAL] Pipeline crashed before completing.")
-        print(f"  Error  : {_err_str}")
-        print(f"{'=' * 44}")
-        print(_tb_str)
-
-        # Try to write a minimal error report so the dashboard and CI
-        # artifact always have something to show.
-        try:
-            os.makedirs(_RESULTS_DIR, exist_ok=True)
-            _error_report = {
-                "run_timestamp":   _ts,
-                "commit_id":       _get_commit_id(),
-                "total_questions": 0,
-                "test_mode":       TEST_MODE,
-                "total_cost_usd":  0.0,
-                "total_tokens":    0,
-                "overall_result":  "ERROR",
-                "failed_gates":    [],
-                "metrics":         {},
-                "gate_results": {
-                    "overall":      "ERROR",
-                    "passed_gates": [],
-                    "failed_gates": [],
-                    "gates":        {},
-                },
-                "sample_failures": [],
-                "all_results":     [],
-                "pipeline_error":  _err_str,
-                "traceback":       _tb_str,
-            }
-            with open(_REPORT_PATH, "w", encoding="utf-8") as _f:
-                json.dump(_error_report, _f, indent=2)
-            print(f"[FATAL] Error report saved → {_REPORT_PATH}")
-        except Exception as _report_exc:
-            print(f"[FATAL] Could not write error report: {_report_exc}")
-
-        exit_code = 1
+        exit_code = main(_args, _run_meta)
+    except Exception as _exc:
+        exit_code = handle_crash(_exc, _run_meta, _args.results_dir)
 
     # os._exit() hard-exits without running Python's cleanup phase.
     # sys.exit() raises SystemExit, which triggers destructor calls on

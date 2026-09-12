@@ -3,8 +3,9 @@
 # ASU LLM Evaluation — Quality Gate Engine
 #
 # Responsibilities:
-#   1. compute_hallucination_rate(results) -> float
-#         Derived from faithfulness: hallucination = 1 - avg_faithfulness
+#   1. compute_hallucination_rate(results) -> float | None
+#         Share of scored answers whose faithfulness falls below
+#         evaluation.hallucination_faithfulness_threshold (default 0.5)
 #
 #   2. compute_aggregate_metrics(results) -> dict
 #         Aggregates all per-question scores into a single metrics dict
@@ -18,150 +19,116 @@
 #         Prints a human-readable gate report to stdout.
 # =============================================================================
 
-import os
-import sys
-
 import numpy as np
-import yaml
+
+from project_config import load_config
+
+DEFAULT_HALLUCINATION_THRESHOLD = 0.5
 
 # -----------------------------------------------------------------------------
-# 0. Load project config (thresholds live in config.yaml → quality_gates)
+# Gate definitions:
+#   (metric_key, threshold_key, direction, gate_name)
+#   direction: "max" = value must be AT OR BELOW threshold (lower is better)
+#              "min" = value must be AT OR ABOVE threshold (higher is better)
 # -----------------------------------------------------------------------------
+GATE_DEFINITIONS = [
+    ("hallucination_rate",  "hallucination_rate_max",  "max", "hallucination_rate"),
+    ("answer_relevancy",    "answer_relevancy_min",    "min", "answer_relevancy"),
+    ("faithfulness",        "faithfulness_min",        "min", "faithfulness"),
+    ("context_precision",   "context_precision_min",   "min", "context_precision"),
+    ("latency_p95_seconds", "latency_p95_max_seconds", "max", "latency_p95"),
+    ("cost_per_query_usd",  "cost_per_query_max_usd",  "max", "cost_per_query"),
+    ("error_rate",          "error_rate_max",          "max", "error_rate"),
+]
 
-# Walk up one directory from src/ to reach the project root
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-_CONFIG_PATH  = os.path.join(_PROJECT_ROOT, "config.yaml")
 
-def _load_thresholds() -> dict:
-    """
-    Load quality-gate thresholds from config.yaml.
-    Returns the quality_gates section as a plain dict.
-    """
-    try:
-        with open(_CONFIG_PATH, "r") as f:
-            cfg = yaml.safe_load(f)
-        return cfg["quality_gates"]
-    except FileNotFoundError:
-        raise FileNotFoundError(f"config.yaml not found at: {_CONFIG_PATH}")
-    except KeyError:
-        raise KeyError("config.yaml is missing the 'quality_gates' section.")
+def hallucination_threshold() -> float:
+    """Faithfulness below this marks an answer as hallucinated (config.yaml → evaluation)."""
+    return load_config()["evaluation"].get(
+        "hallucination_faithfulness_threshold", DEFAULT_HALLUCINATION_THRESHOLD
+    )
 
 
 # -----------------------------------------------------------------------------
 # 1. Hallucination rate (derived metric)
 # -----------------------------------------------------------------------------
 
-def compute_hallucination_rate(results: list) -> float:
+def compute_hallucination_rate(results: list, threshold: float | None = None) -> float | None:
     """
-    Compute the hallucination rate across all evaluated results.
+    Share of scored answers that hallucinated.
 
     Definition
     ----------
-    hallucination_rate = 1.0 - average(faithfulness)
+    hallucination_rate = count(faithfulness < threshold) / count(scored answers)
 
-    A faithfulness score of 1.0 means the answer came entirely from the
-    retrieved context (no hallucination).  A score of 0.0 means the answer
-    was entirely fabricated.  Inverting gives us a hallucination rate that
-    is intuitive: 0 = no hallucination, 1 = total hallucination.
+    This counts *answers* that are mostly unsupported by the retrieved
+    context, so it complements the faithfulness gate (a mean over claims)
+    instead of duplicating it — a run can have a high mean faithfulness and
+    still contain a few fabricated answers.
 
-    Parameters
-    ----------
-    results : list of scored dicts from evaluator.evaluate_batch()
-
-    Returns
-    -------
-    float in [0, 1], or 0.0 if no valid faithfulness scores exist
+    Returns None when no answer was scored, so the gate fails instead of
+    optimistically reporting 0% for a run that produced no evidence.
     """
-    scores = [
-        r["faithfulness"]
-        for r in results
-        if r.get("faithfulness") is not None
-    ]
+    if threshold is None:
+        threshold = hallucination_threshold()
 
+    scores = [r["faithfulness"] for r in results if r.get("faithfulness") is not None]
     if not scores:
-        return 0.0  # cannot determine hallucination — default to 0 (optimistic)
+        return None
 
-    avg_faithfulness = sum(scores) / len(scores)
-    return round(max(0.0, min(1.0, 1.0 - avg_faithfulness)), 4)
+    return round(sum(score < threshold for score in scores) / len(scores), 4)
 
 
 # -----------------------------------------------------------------------------
 # 2. Aggregate metrics across the full result set
 # -----------------------------------------------------------------------------
 
-# Approximate GPT-4o blended cost per token
-# (Input: ~$5/M tokens, Output: ~$15/M tokens → blended ~$10/M = $0.00001/token)
-# The user-specified simpler approximation is $0.000005/token — used here.
-_COST_PER_TOKEN_USD = 0.000005
-
-
-def compute_aggregate_metrics(results: list) -> dict:
+def compute_aggregate_metrics(results: list, hallucination_faithfulness_threshold: float | None = None) -> dict:
     """
-    Compute aggregate metrics from a list of scored result dicts.
+    Compute aggregate metrics from a list of per-question result dicts.
 
     Parameters
     ----------
-    results : list of dicts from evaluator.evaluate_batch()
-              Each dict must contain:
+    results : list of dicts combining rag_pipeline.get_answer() output with
+              evaluator scores. Used keys:
                 faithfulness, answer_relevancy, context_precision,
-                latency_seconds, token_usage
-              None values are skipped per metric.
+                latency_seconds, cost_usd, error
+              None scores are skipped per metric. Results with an "error"
+              (the RAG call failed) count toward error_rate only — their
+              near-instant failure latency and zero cost would otherwise make
+              latency and cost look better than they are.
 
     Returns
     -------
     dict with keys:
-        hallucination_rate    float  — derived from faithfulness
+        hallucination_rate    float  — share of answers with low faithfulness
         answer_relevancy      float  — mean answer relevancy
         faithfulness          float  — mean faithfulness
         context_precision     float  — mean context precision
-        latency_p95_seconds   float  — 95th-percentile latency (numpy)
-        cost_per_query_usd    float  — mean cost estimate per query
+        latency_p95_seconds   float  — 95th-percentile latency of successful calls
+        cost_per_query_usd    float  — mean answer-model cost of successful calls
+        error_rate            float  — share of questions whose RAG call failed
+    Any metric without data is None (its gate then fails).
     """
     if not results:
         raise ValueError("results list is empty — nothing to aggregate.")
 
-    # --- Helper: collect non-None values for a key ---
-    def _collect(key: str) -> list:
-        return [r[key] for r in results if r.get(key) is not None]
+    successful = [r for r in results if not r.get("error")]
 
-    def _mean(values: list) -> float | None:
-        return round(sum(values) / len(values), 4) if values else None
+    def _mean(key: str, rows: list, digits: int = 4) -> float | None:
+        values = [r[key] for r in rows if r.get(key) is not None]
+        return round(sum(values) / len(values), digits) if values else None
 
-    # --- Individual metric averages ---
-    faithfulness_scores     = _collect("faithfulness")
-    relevancy_scores        = _collect("answer_relevancy")
-    precision_scores        = _collect("context_precision")
-
-    avg_faithfulness    = _mean(faithfulness_scores)
-    avg_relevancy       = _mean(relevancy_scores)
-    avg_precision       = _mean(precision_scores)
-
-    # --- Hallucination rate (derived from faithfulness) ---
-    hallucination_rate = compute_hallucination_rate(results)
-
-    # --- Latency p95 using numpy ---
-    latencies = [r["latency_seconds"] for r in results if r.get("latency_seconds") is not None]
-    if latencies:
-        latency_p95 = round(float(np.percentile(latencies, 95)), 3)
-    else:
-        latency_p95 = None
-
-    # --- Cost per query ---
-    # Estimate: token_usage * cost_per_token
-    costs = [
-        r["token_usage"] * _COST_PER_TOKEN_USD
-        for r in results
-        if r.get("token_usage") is not None
-    ]
-    avg_cost = round(sum(costs) / len(costs), 6) if costs else None
+    latencies = [r["latency_seconds"] for r in successful if r.get("latency_seconds") is not None]
 
     return {
-        "hallucination_rate":  hallucination_rate,
-        "answer_relevancy":    avg_relevancy,
-        "faithfulness":        avg_faithfulness,
-        "context_precision":   avg_precision,
-        "latency_p95_seconds": latency_p95,
-        "cost_per_query_usd":  avg_cost,
+        "hallucination_rate":  compute_hallucination_rate(results, hallucination_faithfulness_threshold),
+        "answer_relevancy":    _mean("answer_relevancy", results),
+        "faithfulness":        _mean("faithfulness", results),
+        "context_precision":   _mean("context_precision", results),
+        "latency_p95_seconds": round(float(np.percentile(latencies, 95)), 3) if latencies else None,
+        "cost_per_query_usd":  _mean("cost_usd", successful, digits=6),
+        "error_rate":          round((len(results) - len(successful)) / len(results), 4),
     }
 
 
@@ -169,15 +136,14 @@ def compute_aggregate_metrics(results: list) -> dict:
 # 3. Gate evaluation
 # -----------------------------------------------------------------------------
 
-def check_gates(metrics: dict) -> dict:
+def check_gates(metrics: dict, thresholds: dict | None = None) -> dict:
     """
     Evaluate each aggregate metric against its configured threshold.
 
     Parameters
     ----------
-    metrics : dict from compute_aggregate_metrics() with keys:
-                hallucination_rate, answer_relevancy, faithfulness,
-                context_precision, latency_p95_seconds, cost_per_query_usd
+    metrics    : dict from compute_aggregate_metrics()
+    thresholds : optional override; defaults to config.yaml → quality_gates
 
     Returns
     -------
@@ -187,79 +153,58 @@ def check_gates(metrics: dict) -> dict:
         failed_gates  : list of gate names that failed
         passed_gates  : list of gate names that passed
     """
-    thresholds = _load_thresholds()
-
-    # ------------------------------------------------------------------
-    # Gate definitions:
-    #   Each entry is (metric_key, threshold_key, direction, label)
-    #   direction: "max" = value must be BELOW threshold (lower is better)
-    #              "min" = value must be ABOVE threshold (higher is better)
-    # ------------------------------------------------------------------
-    gate_definitions = [
-        ("hallucination_rate",  "hallucination_rate_max",    "max", "hallucination_rate"),
-        ("answer_relevancy",    "answer_relevancy_min",       "min", "answer_relevancy"),
-        ("faithfulness",        "faithfulness_min",           "min", "faithfulness"),
-        ("context_precision",   "context_precision_min",      "min", "context_precision"),
-        ("latency_p95_seconds", "latency_p95_max_seconds",   "max", "latency_p95"),
-        ("cost_per_query_usd",  "cost_per_query_max_usd",    "max", "cost_per_query"),
-    ]
+    if thresholds is None:
+        thresholds = load_config()["quality_gates"]
 
     gates        = {}
     passed_gates = []
     failed_gates = []
 
-    for metric_key, threshold_key, direction, gate_name in gate_definitions:
+    for metric_key, threshold_key, direction, gate_name in GATE_DEFINITIONS:
         value     = metrics.get(metric_key)
         threshold = thresholds.get(threshold_key)
-
-        # Handle missing or None values gracefully
-        if value is None:
-            gates[gate_name] = {
-                "value":     None,
-                "threshold": threshold,
-                "passed":    False,
-                "message":   f"SKIP: no value available for '{metric_key}'",
-            }
-            failed_gates.append(gate_name)
-            continue
 
         if threshold is None:
             gates[gate_name] = {
                 "value":     value,
                 "threshold": None,
+                "direction": direction,
                 "passed":    True,   # no threshold configured → do not block
                 "message":   f"SKIP: no threshold configured for '{threshold_key}'",
             }
             passed_gates.append(gate_name)
             continue
 
-        # Evaluate the gate
-        if direction == "max":
-            passed = value <= threshold
-            # Message describes the actual relationship, not the expectation
-            op_word = "below max" if passed else "exceeds max"
-            op_sym  = "<="
-        else:  # direction == "min"
-            passed = value >= threshold
-            op_word = "above min" if passed else "below min"
-            op_sym  = ">="
+        # A missing value means nothing could be measured — never a pass
+        if value is None:
+            gates[gate_name] = {
+                "value":     None,
+                "threshold": threshold,
+                "direction": direction,
+                "passed":    False,
+                "message":   f"FAIL: no value for '{metric_key}' (nothing was scored)",
+            }
+            failed_gates.append(gate_name)
+            continue
 
-        verdict = "PASS" if passed else "FAIL"
-        message = f"{verdict}: {value} {op_word} {threshold}"
+        if direction == "max":
+            passed  = value <= threshold
+            op_word = "within max" if passed else "exceeds max"
+        else:  # direction == "min"
+            passed  = value >= threshold
+            op_word = "meets min" if passed else "below min"
 
         gates[gate_name] = {
             "value":     value,
             "threshold": threshold,
+            "direction": direction,
             "passed":    passed,
-            "message":   message,
+            "message":   f"{'PASS' if passed else 'FAIL'}: {value} {op_word} {threshold}",
         }
-
         (passed_gates if passed else failed_gates).append(gate_name)
 
-    overall = "PASS" if len(failed_gates) == 0 else "FAIL"
-
     return {
-        "overall":      overall,
+        "overall":      "PASS" if not failed_gates else "FAIL",
         "gates":        gates,
         "failed_gates": failed_gates,
         "passed_gates": passed_gates,
@@ -269,6 +214,18 @@ def check_gates(metrics: dict) -> dict:
 # -----------------------------------------------------------------------------
 # 4. Human-readable report printer
 # -----------------------------------------------------------------------------
+
+_REPORT_FORMAT = {
+    # gate_name: (value formatter, threshold formatter)
+    "hallucination_rate": (lambda v: f"{v:.4f}",  lambda t: f"{t}"),
+    "answer_relevancy":   (lambda v: f"{v:.4f}",  lambda t: f"{t}"),
+    "faithfulness":       (lambda v: f"{v:.4f}",  lambda t: f"{t}"),
+    "context_precision":  (lambda v: f"{v:.4f}",  lambda t: f"{t}"),
+    "latency_p95":        (lambda v: f"{v}s",     lambda t: f"{t}s"),
+    "cost_per_query":     (lambda v: f"${v:.4f}", lambda t: f"${t}"),
+    "error_rate":         (lambda v: f"{v:.1%}",  lambda t: f"{t:.0%}"),
+}
+
 
 def print_gate_report(gate_results: dict) -> None:
     """
@@ -280,63 +237,43 @@ def print_gate_report(gate_results: dict) -> None:
     """
     DIVIDER = "=" * 44
 
-    # ------------------------------------------------------------------
-    # Display configuration:
-    #   (gate_name, format_fn for value, format_fn for threshold, symbol)
-    # ------------------------------------------------------------------
-    _fmt = {
-        "hallucination_rate": (lambda v: f"{v:.4f}",  lambda t: f"{t}",    "<="),
-        "answer_relevancy":   (lambda v: f"{v:.4f}",  lambda t: f"{t}",    ">="),
-        "faithfulness":       (lambda v: f"{v:.4f}",  lambda t: f"{t}",    ">="),
-        "context_precision":  (lambda v: f"{v:.4f}",  lambda t: f"{t}",    ">="),
-        "latency_p95":        (lambda v: f"{v}s",     lambda t: f"{t}s",   "<="),
-        "cost_per_query":     (lambda v: f"${v:.4f}", lambda t: f"${t}",   "<="),
-    }
-
-    gates = gate_results["gates"]
-
     print(DIVIDER)
     print("QUALITY GATE REPORT")
     print(DIVIDER)
 
-    for gate_name, info in gates.items():
+    for gate_name, info in gate_results["gates"].items():
         verdict   = "PASS" if info["passed"] else "FAIL"
         value     = info["value"]
         threshold = info["threshold"]
 
-        if value is None or threshold is None:
-            detail = info["message"]
+        if threshold is None:
+            detail = "(skipped: no threshold configured)"
+        elif value is None:
+            detail = "(no value: nothing was scored)"
         else:
-            fmt_v, fmt_t, sym = _fmt.get(
-                gate_name,
-                (lambda v: str(v), lambda t: str(t), "?")
-            )
+            fmt_v, fmt_t = _REPORT_FORMAT.get(gate_name, (str, str))
+            sym = "<=" if info.get("direction") == "max" else ">="
             detail = f"({fmt_v(value)} {sym} {fmt_t(threshold)})"
 
-        # Pad gate name for alignment
-        label = f"{gate_name:<20}"
-        print(f"  {label}: {verdict:<4}  {detail}")
+        print(f"  {gate_name:<20}: {verdict:<4}  {detail}")
 
     print(DIVIDER)
 
     overall      = gate_results["overall"]
     failed_gates = gate_results["failed_gates"]
-    passed_gates = gate_results["passed_gates"]
 
     print(f"OVERALL RESULT: {overall}")
-
     if overall == "PASS":
-        print(f"All {len(passed_gates)} gates passed. Safe to deploy.")
+        print(f"All {len(gate_results['passed_gates'])} gates passed. Safe to deploy.")
     else:
-        n_failed = len(failed_gates)
-        print(f"{n_failed} gate(s) failed. Deployment blocked.")
+        print(f"{len(failed_gates)} gate(s) failed. Deployment blocked.")
         print(f"Failed gates: {', '.join(failed_gates)}")
 
     print(DIVIDER)
 
 
 # -----------------------------------------------------------------------------
-# 5. Quick-test entry point
+# 5. Quick-test entry point (offline — no API calls)
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -345,85 +282,44 @@ if __name__ == "__main__":
     print("  Quality Gates - Scenario Tests")
     print("=" * 44)
 
-    # ------------------------------------------------------------------
-    # Scenario 1: All gates pass
-    # ------------------------------------------------------------------
-    print("\n--- Scenario 1: All gates should PASS ---\n")
-
-    metrics_pass = {
-        "hallucination_rate":  0.03,
+    base_metrics = {
+        "hallucination_rate":  0.0,
         "answer_relevancy":    0.82,
         "faithfulness":        0.91,
         "context_precision":   0.75,
         "latency_p95_seconds": 2.1,
-        "cost_per_query_usd":  0.014,
+        "cost_per_query_usd":  0.005,
+        "error_rate":          0.0,
     }
 
-    gate_results_pass = check_gates(metrics_pass)
-    print_gate_report(gate_results_pass)
+    print("\n--- Scenario 1: All gates should PASS ---\n")
+    print_gate_report(check_gates(base_metrics))
 
-    # ------------------------------------------------------------------
-    # Scenario 2: Two gates fail (hallucination_rate + answer_relevancy)
-    # ------------------------------------------------------------------
     print("\n--- Scenario 2: Two gates should FAIL ---\n")
+    print_gate_report(check_gates({**base_metrics, "hallucination_rate": 0.2, "answer_relevancy": 0.60}))
 
-    metrics_fail = {
-        "hallucination_rate":  0.12,   # FAIL: 0.12 > max 0.05
-        "answer_relevancy":    0.60,   # FAIL: 0.60 < min 0.75
-        "faithfulness":        0.91,
-        "context_precision":   0.75,
-        "latency_p95_seconds": 2.1,
-        "cost_per_query_usd":  0.014,
-    }
-
-    gate_results_fail = check_gates(metrics_fail)
-    print_gate_report(gate_results_fail)
-
-    # ------------------------------------------------------------------
-    # Also demonstrate compute_aggregate_metrics with mock data
-    # ------------------------------------------------------------------
-    print("\n--- Bonus: compute_aggregate_metrics demo ---\n")
-
-    mock_results = [
-        {
-            "question":          "Q1",
-            "answer":            "A1",
-            "faithfulness":      0.91,
-            "answer_relevancy":  0.82,
-            "context_precision": 0.75,
-            "latency_seconds":   2.1,
-            "token_usage":       400,
-            "evaluation_error":  None,
-        },
-        {
-            "question":          "Q2",
-            "answer":            "A2",
-            "faithfulness":      1.0,
-            "answer_relevancy":  0.88,
-            "context_precision": 0.60,
-            "latency_seconds":   1.2,
-            "token_usage":       350,
-            "evaluation_error":  None,
-        },
-        {
-            "question":          "Q3",
-            "answer":            "A3",
-            "faithfulness":      0.85,
-            "answer_relevancy":  0.79,
-            "context_precision": 0.70,
-            "latency_seconds":   3.8,   # this one is slow — will push p95 up
-            "token_usage":       500,
-            "evaluation_error":  None,
-        },
+    print("\n--- Scenario 3: Every RAG call failed (e.g. OpenAI quota exhausted) ---\n")
+    outage = [
+        {"question": f"Q{i}", "answer": "", "error": "RateLimitError: insufficient_quota",
+         "faithfulness": None, "answer_relevancy": None, "context_precision": None,
+         "latency_seconds": 1.4, "token_usage": 0, "cost_usd": None}
+        for i in range(10)
     ]
+    print_gate_report(check_gates(compute_aggregate_metrics(outage)))
 
+    print("\n--- Scenario 4: compute_aggregate_metrics with mock data ---\n")
+    mock_results = [
+        {"faithfulness": 0.91, "answer_relevancy": 0.82, "context_precision": 0.75,
+         "latency_seconds": 2.1, "cost_usd": 0.0042, "error": None},
+        {"faithfulness": 1.0,  "answer_relevancy": 0.88, "context_precision": 0.60,
+         "latency_seconds": 1.2, "cost_usd": 0.0039, "error": None},
+        {"faithfulness": 0.3,  "answer_relevancy": 0.79, "context_precision": 0.70,
+         "latency_seconds": 3.8, "cost_usd": 0.0047, "error": None},   # hallucinated answer
+    ]
     agg = compute_aggregate_metrics(mock_results)
-    print("  Aggregate metrics from 3 mock results:")
     for k, v in agg.items():
         print(f"    {k:<22}: {v}")
-
-    print("\n  Running check_gates on aggregated metrics...")
-    gate_results_agg = check_gates(agg)
-    print_gate_report(gate_results_agg)
+    print()
+    print_gate_report(check_gates(agg))
 
     print("Quality gate tests complete.\n")

@@ -12,8 +12,11 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 // Data URLs
 // ─────────────────────────────────────────────────────────────────────────────
-const REPORT_URL  = 'https://raw.githubusercontent.com/PHANI465/asu-llm-eval/main/results/latest_report.json'
-const HISTORY_URL = 'https://raw.githubusercontent.com/PHANI465/asu-llm-eval/main/results/eval_history.json'
+// Override with VITE_REPORT_URL / VITE_HISTORY_URL (e.g. for a fork or local testing)
+const REPORT_URL  = import.meta.env.VITE_REPORT_URL
+  || 'https://raw.githubusercontent.com/PHANI465/asu-llm-eval/main/results/latest_report.json'
+const HISTORY_URL = import.meta.env.VITE_HISTORY_URL
+  || 'https://raw.githubusercontent.com/PHANI465/asu-llm-eval/main/results/eval_history.json'
 const REFRESH_INTERVAL = 30
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,7 +51,7 @@ const C = {
 // ─────────────────────────────────────────────────────────────────────────────
 const fmtPct   = v => v == null ? 'N/A' : `${(v * 100).toFixed(1)}%`
 const fmtScore = v => v == null ? 'N/A' : v.toFixed(4)
-const fmtSec   = v => v == null ? 'N/A' : `${v}s`
+const fmtSec   = v => v == null ? 'N/A' : `${Number(v).toFixed(2)}s`
 const fmtUsd   = v => v == null ? 'N/A' : `$${v.toFixed(4)}`
 const fmtTs    = ts => {
   if (!ts) return '—'
@@ -99,7 +102,19 @@ const METRIC_CONFIG = {
     label: 'Cost per Query', icon: DollarSign,
     format: fmtUsd, direction: 'max', unit: 'lower is better',
   },
+  error_rate: {
+    label: 'Error Rate', icon: AlertTriangle,
+    format: fmtPct, direction: 'max', unit: 'lower is better',
+  },
 }
+
+// Visual treatment for a gate / run state
+const TONES = {
+  pass: { color: C.pass,  bg: C.passBg, iconBg: 'rgba(74,222,128,0.15)',  label: '✓ PASS'  },
+  fail: { color: C.fail,  bg: C.failBg, iconBg: 'rgba(248,113,113,0.15)', label: '✗ FAIL'  },
+  none: { color: C.muted, bg: 'rgba(255,255,255,0.03)', iconBg: 'rgba(255,255,255,0.06)', label: 'NO DATA' },
+}
+const gateTone = gate => gate == null ? TONES.none : gate.passed ? TONES.pass : TONES.fail
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Score color helper (for question table cells)
@@ -160,19 +175,19 @@ function ErrorScreen({ message, onRetry }) {
 }
 
 function StatusBadge({ status }) {
-  const isPass = status === 'PASS'
+  const tone = status === 'PASS' ? C.pass : status === 'FAIL' ? C.fail : C.warn
+  const bg   = status === 'PASS' ? C.passBg : status === 'FAIL' ? C.failBg : C.warnBg
+  const Icon = status === 'PASS' ? CheckCircle : status === 'FAIL' ? XCircle : AlertTriangle
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 6,
-      background: isPass ? C.passBg : C.failBg,
-      border: `1.5px solid ${isPass ? C.pass : C.fail}`,
-      color: isPass ? C.pass : C.fail,
+      background: bg,
+      border: `1.5px solid ${tone}`,
+      color: tone,
       borderRadius: 999, padding: '6px 18px',
       fontSize: 15, fontWeight: 700, letterSpacing: '0.05em',
     }}>
-      {isPass
-        ? <CheckCircle size={16} strokeWidth={2.5} />
-        : <XCircle    size={16} strokeWidth={2.5} />}
+      <Icon size={16} strokeWidth={2.5} />
       {status}
     </span>
   )
@@ -181,7 +196,7 @@ function StatusBadge({ status }) {
 function MetricCard({ gateKey, gate }) {
   const cfg   = METRIC_CONFIG[gateKey] || {}
   const Icon  = cfg.icon || Activity
-  const pass  = gate?.passed ?? true
+  const tone  = gateTone(gate)
   const value = gate?.value
   const thr   = gate?.threshold
 
@@ -191,15 +206,15 @@ function MetricCard({ gateKey, gate }) {
   return (
     <div
       style={{
-        background: pass ? C.passBg : C.failBg,
-        border: `1px solid ${pass ? C.pass + '40' : C.fail + '40'}`,
+        background: tone.bg,
+        border: `1px solid ${tone.color}40`,
         borderRadius: 12, padding: '20px 22px',
         display: 'flex', flexDirection: 'column', gap: 12,
         transition: 'transform 0.15s, box-shadow 0.15s',
       }}
       onMouseEnter={e => {
         e.currentTarget.style.transform = 'translateY(-2px)'
-        e.currentTarget.style.boxShadow = `0 8px 24px ${pass ? 'rgba(74,222,128,0.12)' : 'rgba(248,113,113,0.12)'}`
+        e.currentTarget.style.boxShadow = `0 8px 24px ${tone.color}1f`
       }}
       onMouseLeave={e => {
         e.currentTarget.style.transform = 'none'
@@ -207,17 +222,14 @@ function MetricCard({ gateKey, gate }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{
-          background: pass ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)',
-          borderRadius: 8, padding: 8,
-        }}>
-          <Icon size={18} color={pass ? C.pass : C.fail} strokeWidth={2} />
+        <div style={{ background: tone.iconBg, borderRadius: 8, padding: 8 }}>
+          <Icon size={18} color={tone.color} strokeWidth={2} />
         </div>
         <span style={{
           fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-          color: pass ? C.pass : C.fail, textTransform: 'uppercase',
+          color: tone.color, textTransform: 'uppercase',
         }}>
-          {pass ? '✓ PASS' : '✗ FAIL'}
+          {tone.label}
         </span>
       </div>
       <div>
@@ -233,7 +245,7 @@ function MetricCard({ gateKey, gate }) {
         borderTop: `1px solid ${C.border}`, paddingTop: 10,
         display: 'flex', justifyContent: 'space-between',
       }}>
-        <span>{cfg.direction === 'max' ? 'Max allowed' : 'Min required'}</span>
+        <span>{(gate?.direction || cfg.direction) === 'max' ? 'Max allowed' : 'Min required'}</span>
         <span style={{ color: C.text2, fontWeight: 500 }}>{fmtThr}</span>
       </div>
     </div>
@@ -258,9 +270,10 @@ function GateTable({ gates }) {
         </thead>
         <tbody>
           {rows.map(([key, gate], i) => {
-            const cfg  = METRIC_CONFIG[key] || {}
-            const pass = gate?.passed ?? true
-            const fmt  = cfg.format || (v => v)
+            const cfg       = METRIC_CONFIG[key] || {}
+            const pass      = gate?.passed ?? false
+            const fmt       = cfg.format || (v => v)
+            const direction = gate?.direction || cfg.direction
             return (
               <tr key={key} style={{
                 background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)',
@@ -274,7 +287,7 @@ function GateTable({ gates }) {
                 </td>
                 <td style={{ padding: '12px 14px', color: C.muted }}>
                   {gate?.threshold != null
-                    ? `${cfg.direction === 'max' ? '≤' : '≥'} ${fmt(gate.threshold)}`
+                    ? `${direction === 'max' ? '≤' : '≥'} ${fmt(gate.threshold)}`
                     : '—'}
                 </td>
                 <td style={{ padding: '12px 14px' }}>
@@ -323,7 +336,17 @@ function DarkTooltip({ active, payload, label }) {
 }
 
 // ─── Trend Charts (2×2 grid) ──────────────────────────────────────────────────
-function TrendCharts({ chartData }) {
+// Y-axis upper bound that always leaves room for both the data and the threshold line,
+// rounded up so the default 5 ticks land on even values (e.g. 0.2 → 5% steps)
+const upperBound = (limit, fallback) => dataMax => {
+  const top = Math.max(Number.isFinite(dataMax) ? dataMax : 0, limit ?? 0) * 1.25
+  if (!(top > 0)) return fallback
+  const base = 10 ** Math.floor(Math.log10(top))
+  return [1, 2, 4, 8, 10].map(m => m * base).find(v => v >= top)
+}
+
+function TrendCharts({ chartData, gates }) {
+  const thr = key => gates?.[key]?.threshold
   if (!chartData || chartData.length < 2) {
     return (
       <div style={{
@@ -365,33 +388,43 @@ function TrendCharts({ chartData }) {
           <LineChart data={chartData} margin={{ top: 4, right: 24, bottom: 4, left: 0 }}>
             <CartesianGrid {...grid} />
             <XAxis dataKey="label" tick={ax} />
-            <YAxis domain={[0, 1]} tick={ax} tickFormatter={v => v.toFixed(1)} />
+            <YAxis domain={[0, 1]} tick={ax} tickFormatter={v => v.toFixed(2)} />
             <Tooltip content={<DarkTooltip />} />
             <Legend {...lText} />
-            <ReferenceLine y={0.80} stroke={C.fail}   strokeDasharray="5 4"
-              label={{ value: '0.80', fill: C.fail,   fontSize: 10, position: 'insideTopRight' }} />
-            <ReferenceLine y={0.75} stroke={C.orange} strokeDasharray="5 4"
-              label={{ value: '0.75', fill: C.orange, fontSize: 10, position: 'insideBottomRight' }} />
+            {thr('faithfulness') != null && (
+              <ReferenceLine y={thr('faithfulness')} stroke={C.blue} strokeDasharray="5 4"
+                label={{ value: `faithfulness ${thr('faithfulness')}`, fill: C.blue, fontSize: 10, position: 'insideTopRight' }} />
+            )}
+            {thr('answer_relevancy') != null && (
+              <ReferenceLine y={thr('answer_relevancy')} stroke={C.pass} strokeDasharray="5 4"
+                label={{ value: `relevancy ${thr('answer_relevancy')}`, fill: C.pass, fontSize: 10, position: 'insideBottomRight' }} />
+            )}
             <Line type="monotone" dataKey="faithfulness"     name="Faithfulness" stroke={C.blue}   strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
             <Line type="monotone" dataKey="answer_relevancy" name="Relevancy"    stroke={C.pass}   strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Chart 2 — Hallucination Rate */}
+      {/* Chart 2 — Hallucination + Error Rate */}
       <div style={card}>
         <p style={{ color: C.text2, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
-          Hallucination Rate
+          Hallucination &amp; Error Rate
         </p>
         <ResponsiveContainer width="100%" height={200}>
           <LineChart data={chartData} margin={{ top: 4, right: 24, bottom: 4, left: 0 }}>
             <CartesianGrid {...grid} />
             <XAxis dataKey="label" tick={ax} />
-            <YAxis domain={[0, 0.2]} tick={ax} tickFormatter={v => `${(v * 100).toFixed(0)}%`} />
+            <YAxis
+              domain={[0, upperBound(Math.max(thr('hallucination_rate') ?? 0, thr('error_rate') ?? 0), 0.2)]}
+              tick={ax} tickFormatter={v => `${(v * 100).toFixed(0)}%`} />
             <Tooltip content={<DarkTooltip />} />
-            <ReferenceLine y={0.10} stroke={C.fail} strokeDasharray="5 4"
-              label={{ value: '10%', fill: C.fail, fontSize: 10, position: 'insideTopRight' }} />
+            <Legend {...lText} />
+            {thr('hallucination_rate') != null && (
+              <ReferenceLine y={thr('hallucination_rate')} stroke={C.fail} strokeDasharray="5 4"
+                label={{ value: fmtPct(thr('hallucination_rate')), fill: C.fail, fontSize: 10, position: 'insideTopRight' }} />
+            )}
             <Line type="monotone" dataKey="hallucination_rate" name="Hallucination Rate" stroke={C.fail} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+            <Line type="monotone" dataKey="error_rate"         name="Error Rate"         stroke={C.warn} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -405,10 +438,12 @@ function TrendCharts({ chartData }) {
           <LineChart data={chartData} margin={{ top: 4, right: 24, bottom: 4, left: 0 }}>
             <CartesianGrid {...grid} />
             <XAxis dataKey="label" tick={ax} />
-            <YAxis domain={[0, 20]} tick={ax} tickFormatter={v => `${v}s`} />
+            <YAxis domain={[0, upperBound(thr('latency_p95'), 20)]} tick={ax} tickFormatter={v => `${Math.round(v)}s`} />
             <Tooltip content={<DarkTooltip />} />
-            <ReferenceLine y={15} stroke={C.fail} strokeDasharray="5 4"
-              label={{ value: '15s', fill: C.fail, fontSize: 10, position: 'insideTopRight' }} />
+            {thr('latency_p95') != null && (
+              <ReferenceLine y={thr('latency_p95')} stroke={C.fail} strokeDasharray="5 4"
+                label={{ value: `${thr('latency_p95')}s`, fill: C.fail, fontSize: 10, position: 'insideTopRight' }} />
+            )}
             <Line type="monotone" dataKey="latency_p95" name="Latency p95" stroke={C.orange} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
           </LineChart>
         </ResponsiveContainer>
@@ -423,10 +458,12 @@ function TrendCharts({ chartData }) {
           <LineChart data={chartData} margin={{ top: 4, right: 24, bottom: 4, left: 0 }}>
             <CartesianGrid {...grid} />
             <XAxis dataKey="label" tick={ax} />
-            <YAxis domain={[0, 0.025]} tick={ax} tickFormatter={v => `$${v.toFixed(3)}`} />
+            <YAxis domain={[0, upperBound(thr('cost_per_query'), 0.04)]} tick={ax} tickFormatter={v => `$${v.toFixed(3)}`} />
             <Tooltip content={<DarkTooltip />} />
-            <ReferenceLine y={0.02} stroke={C.fail} strokeDasharray="5 4"
-              label={{ value: '$0.02', fill: C.fail, fontSize: 10, position: 'insideTopRight' }} />
+            {thr('cost_per_query') != null && (
+              <ReferenceLine y={thr('cost_per_query')} stroke={C.fail} strokeDasharray="5 4"
+                label={{ value: `$${thr('cost_per_query')}`, fill: C.fail, fontSize: 10, position: 'insideTopRight' }} />
+            )}
             <Line type="monotone" dataKey="cost_per_query" name="Cost/Query" stroke={C.purple} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
           </LineChart>
         </ResponsiveContainer>
@@ -464,6 +501,11 @@ function QuestionTable({ allResults }) {
     return arr
   }, [allResults, filterCat, filterDiff, filterRes, searchText])
 
+  const categories = useMemo(
+    () => [...new Set((allResults || []).map(r => r.category).filter(Boolean))].sort(),
+    [allResults],
+  )
+
   const totalCount = (allResults || []).length
 
   if (!totalCount) {
@@ -489,12 +531,7 @@ function QuestionTable({ allResults }) {
       }}>
         <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={sel}>
           <option value="all">All Categories</option>
-          <option value="admissions">admissions</option>
-          <option value="tuition">tuition</option>
-          <option value="housing">housing</option>
-          <option value="scholarships">scholarships</option>
-          <option value="graduate_admissions">graduate_admissions</option>
-          <option value="general_info">general_info</option>
+          {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
         </select>
 
         <select value={filterDiff} onChange={e => setFilterDiff(e.target.value)} style={sel}>
@@ -555,8 +592,10 @@ function QuestionTable({ allResults }) {
                 </td>
               </tr>
             ) : filtered.map((row, i) => {
-              const rowBg = i % 2 === 0 ? C.card : C.card3
-              const pass  = row.passed
+              const rowBg       = i % 2 === 0 ? C.card : C.card3
+              const pass        = row.passed
+              const isError     = !pass && !!row.error
+              const statusColor = pass ? C.pass : isError ? C.warn : C.fail
               return (
                 <tr
                   key={row.id ?? i}
@@ -606,17 +645,20 @@ function QuestionTable({ allResults }) {
                     {row.latency_seconds != null ? `${row.latency_seconds.toFixed(1)}s` : 'N/A'}
                   </td>
                   <td style={{ padding: '10px 12px' }}>
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 5,
-                      color: pass ? C.pass : C.fail,
-                      fontSize: 12, fontWeight: 700,
-                    }}>
+                    <span
+                      title={row.error || undefined}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                        color: statusColor,
+                        fontSize: 12, fontWeight: 700,
+                      }}
+                    >
                       <span style={{
                         width: 7, height: 7, borderRadius: '50%',
-                        background: pass ? C.pass : C.fail,
+                        background: statusColor,
                         display: 'inline-block', flexShrink: 0,
                       }} />
-                      {pass ? 'PASS' : 'FAIL'}
+                      {pass ? 'PASS' : isError ? 'ERROR' : 'FAIL'}
                     </span>
                   </td>
                 </tr>
@@ -639,13 +681,23 @@ function FailureCard({ failure }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <span style={{
-              background: C.failBg, border: `1px solid ${C.fail}50`,
-              color: C.fail, borderRadius: 6, padding: '2px 8px',
-              fontSize: 11, fontWeight: 700,
-            }}>
-              faithfulness = {failure.faithfulness?.toFixed(2) ?? 'N/A'}
-            </span>
+            {failure.faithfulness == null && failure.error ? (
+              <span style={{
+                background: C.warnBg, border: `1px solid ${C.warn}50`,
+                color: C.warn, borderRadius: 6, padding: '2px 8px',
+                fontSize: 11, fontWeight: 700,
+              }}>
+                not scored
+              </span>
+            ) : (
+              <span style={{
+                background: C.failBg, border: `1px solid ${C.fail}50`,
+                color: C.fail, borderRadius: 6, padding: '2px 8px',
+                fontSize: 11, fontWeight: 700,
+              }}>
+                faithfulness = {failure.faithfulness?.toFixed(2) ?? 'N/A'}
+              </span>
+            )}
             {failure.category && (
               <span style={{
                 color: C.muted, fontSize: 11,
@@ -672,15 +724,21 @@ function FailureCard({ failure }) {
       </div>
       {expanded && (
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
-          <p style={{
-            color: C.muted, fontSize: 11, fontWeight: 600,
-            letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 6,
-          }}>
-            Answer
-          </p>
-          <p style={{ color: C.text2, fontSize: 13, lineHeight: 1.6 }}>
-            {failure.answer}
-          </p>
+          {[['Expected answer', failure.expected_answer], ['Answer', failure.answer]]
+            .filter(([, text]) => text)
+            .map(([label, text]) => (
+              <div key={label} style={{ marginBottom: 10 }}>
+                <p style={{
+                  color: C.muted, fontSize: 11, fontWeight: 600,
+                  letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 6,
+                }}>
+                  {label}
+                </p>
+                <p style={{ color: C.text2, fontSize: 13, lineHeight: 1.6 }}>
+                  {text}
+                </p>
+              </div>
+            ))}
           {failure.error && (
             <p style={{ color: C.warn, fontSize: 12, marginTop: 8 }}>
               Error: {failure.error}
@@ -688,6 +746,22 @@ function FailureCard({ failure }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function Banner({ tone, bg, title, children }) {
+  return (
+    <div style={{
+      display: 'flex', gap: 12, alignItems: 'flex-start',
+      background: bg, border: `1px solid ${tone}50`,
+      borderRadius: 12, padding: '14px 18px', marginBottom: 24,
+    }}>
+      <AlertTriangle size={18} color={tone} style={{ flexShrink: 0, marginTop: 2 }} />
+      <div style={{ fontSize: 13, lineHeight: 1.5, minWidth: 0 }}>
+        <p style={{ color: tone, fontWeight: 600, marginBottom: 4 }}>{title}</p>
+        <div style={{ color: C.text2 }}>{children}</div>
+      </div>
     </div>
   )
 }
@@ -747,10 +821,12 @@ export default function App() {
       .then(([report, hist]) => {
         setData(report)
         setHistory(hist)
+        setError(null)
         setLoading(false)
         setRefreshing(false)
       })
       .catch(err => {
+        // Keep showing the last good data; the error appears as a banner
         setError(err.message)
         setLoading(false)
         setRefreshing(false)
@@ -783,23 +859,27 @@ export default function App() {
       faithfulness:       run.faithfulness,
       answer_relevancy:   run.answer_relevancy,
       hallucination_rate: run.hallucination_rate,
+      error_rate:         run.error_rate,
       latency_p95:        run.latency_p95_seconds,
       cost_per_query:     run.cost_per_query_usd,
     }))
   }, [history])
 
-  if (loading) return <LoadingScreen />
-  if (error)   return <ErrorScreen message={error} onRetry={fetchData} />
+  if (loading)        return <LoadingScreen />
+  if (error && !data) return <ErrorScreen message={error} onRetry={fetchData} />
 
-  const overall    = data.overall_result ?? 'UNKNOWN'
-  const isPass     = overall === 'PASS'
-  const metrics    = data.metrics        ?? {}
-  const gates      = data.gate_results?.gates ?? {}
-  const failures   = data.sample_failures ?? []
-  const allResults = data.all_results    ?? []
-  const testMode   = data.test_mode
-  const totalCost  = data.total_cost_usd
-  const totalTok   = data.total_tokens
+  const overall     = data.overall_result ?? 'UNKNOWN'
+  const isPass      = overall === 'PASS'
+  const gates       = data.gate_results?.gates ?? {}
+  const failures    = data.sample_failures ?? []
+  const failedCount = data.failed_question_count ?? failures.length
+  const allResults  = data.all_results    ?? []
+  const testMode    = data.test_mode
+  const totalCost   = data.total_cost_usd
+  const totalTok    = data.total_tokens
+  const models      = data.models ?? {}
+  const answerModel = models.answer ?? 'gpt-4o'
+  const judgeModel  = models.judge ?? 'gpt-4o-mini'
 
   return (
     <div className="fade-in" style={{ background: C.bg, minHeight: '100vh' }}>
@@ -873,7 +953,7 @@ export default function App() {
                 )}
               </div>
               <p style={{ color: C.muted, fontSize: 14, marginTop: 8 }}>
-                Powered by RAGAS + GPT-4o · gpt-4o-mini judge
+                Powered by RAGAS · {answerModel} answers · {judgeModel} judge
               </p>
             </div>
 
@@ -908,7 +988,9 @@ export default function App() {
                 color: testMode ? C.warn : C.pass,
               }}>
                 {data.total_questions ?? '—'}
-                <span style={{ fontSize: 13, color: C.muted, fontWeight: 400 }}> / 100</span>
+                {data.dataset_size != null && (
+                  <span style={{ fontSize: 13, color: C.muted, fontWeight: 400 }}> / {data.dataset_size}</span>
+                )}
               </div>
             </div>
 
@@ -923,6 +1005,11 @@ export default function App() {
               <div style={{ fontSize: 20, fontWeight: 700, color: C.purple, marginTop: 2 }}>
                 {totalCost != null ? `$${totalCost.toFixed(3)}` : 'N/A'}
               </div>
+              {data.judge_cost_usd != null && (
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                  answers {fmtUsd(data.answer_cost_usd)} + judge {fmtUsd(data.judge_cost_usd)}
+                </div>
+              )}
             </div>
 
             {/* Total Tokens */}
@@ -954,6 +1041,19 @@ export default function App() {
             )}
           </div>
         </div>
+
+        {/* ─── Banners: stale data / pipeline error ───────────────────────── */}
+        {error && (
+          <Banner tone={C.warn} bg={C.warnBg} title="Latest refresh failed — showing the last data that loaded">
+            {error}
+          </Banner>
+        )}
+        {overall === 'ERROR' && (
+          <Banner tone={C.fail} bg={C.failBg} title="The last evaluation run could not complete — no quality scores were produced">
+            <code style={{ color: C.text2, fontSize: 12, wordBreak: 'break-word' }}>{data.pipeline_error}</code>
+            {data.error_hint && <p style={{ marginTop: 8, color: C.text2 }}>{data.error_hint}</p>}
+          </Banner>
+        )}
 
         {/* ─── SECTION 2: Quality Metrics ────────────────────────────────── */}
         <Section title="Quality Metrics">
@@ -1002,7 +1102,7 @@ export default function App() {
             )
           }
         >
-          <TrendCharts chartData={chartData} />
+          <TrendCharts chartData={chartData} gates={gates} />
         </Section>
 
         {/* ─── SECTION 5: Question Results ────────────────────────────────── */}
@@ -1032,11 +1132,15 @@ export default function App() {
               background: 'rgba(255,255,255,0.05)',
               borderRadius: 6, padding: '3px 10px',
             }}>
-              {failures.length} failure{failures.length !== 1 ? 's' : ''}
+              {failedCount > failures.length
+                ? `worst ${failures.length} of ${failedCount} failed questions`
+                : `${failedCount} failure${failedCount !== 1 ? 's' : ''}`}
             </span>
           }
         >
-          {failures.length === 0
+          {allResults.length === 0
+            ? <p style={{ color: C.muted, fontSize: 14 }}>No questions were evaluated in this run.</p>
+            : failures.length === 0
             ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.pass, padding: '8px 0' }}>
                 <CheckCircle size={18} strokeWidth={2.5} />
@@ -1078,7 +1182,7 @@ export default function App() {
             Powered by{' '}
             <span style={{ color: C.text2 }}>RAGAS</span>
             {' + '}
-            <span style={{ color: C.text2 }}>GPT-4o</span>
+            <span style={{ color: C.text2 }}>{answerModel}</span>
             {' · '}
             <span style={{ color: C.text2 }}>Pinecone</span>
             {' · '}

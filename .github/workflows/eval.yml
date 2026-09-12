@@ -2,15 +2,16 @@
 # .github/workflows/eval.yml
 # ASU LLM Evaluation — CI/CD Quality Gate Workflow
 #
-# Triggers on every push to main/master and on pull requests targeting main.
-# Runs the full RAGAS evaluation pipeline and PASSES or FAILS the CI check
-# based on whether all quality gates are satisfied.
+# Triggers on every push to main/master, on pull requests targeting them, and
+# manually (with an optional full 100-question run).
 #
-# Required repository secret:
-#   OPENAI_API_KEY  — set at Settings > Secrets and variables > Actions
+#   1. Offline unit tests  (free, no secrets) — fail fast on code bugs
+#   2. RAGAS evaluation    (paid API calls)   — PASS / FAIL / ERROR
+#   3. Report artifact + run summary page
+#   4. On main/master only: commit results so the Vercel dashboard updates
 #
-# Artifacts:
-#   latest_report.json is uploaded so you can download it from the Actions UI.
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   OPENAI_API_KEY, PINECONE_API_KEY
 # =============================================================================
 
 name: LLM Evaluation Pipeline
@@ -29,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       full_run:
-        description: "Run full 100-question evaluation instead of TEST_MODE (10 Qs)"
+        description: "Evaluate all 100 questions instead of the 10-question test sample"
         required: false
         default: "false"
         type: choice
@@ -48,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
 
     # contents: write is required for the final "Commit evaluation results" step
-    # to push latest_report.json back to the repository using GITHUB_TOKEN.
+    # to push results back to the repository using GITHUB_TOKEN.
     permissions:
       contents: write
 
@@ -57,68 +58,56 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # ── 2. Validate required secrets ──────────────────────────────────────
-      #    Fail early with a clear message if either API key secret is missing.
-      - name: Check required secrets
-        run: |
-          MISSING=0
-          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
-            echo "ERROR: OPENAI_API_KEY secret is not configured."
-            MISSING=1
-          else
-            echo "OPENAI_API_KEY    : configured."
-          fi
-          if [ -z "${{ secrets.PINECONE_API_KEY }}" ]; then
-            echo "ERROR: PINECONE_API_KEY secret is not configured."
-            MISSING=1
-          else
-            echo "PINECONE_API_KEY  : configured."
-          fi
-          if [ "$MISSING" -eq 1 ]; then
-            echo ""
-            echo "Add missing secrets at:"
-            echo "  GitHub repo -> Settings -> Secrets and variables -> Actions"
-            exit 1
-          fi
-
-      # ── 3. Python setup ───────────────────────────────────────────────────
+      # ── 2. Python setup + dependencies ────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
 
-      # ── 4. Install dependencies ───────────────────────────────────────────
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 5. Write .env from secrets ────────────────────────────────────────
-      - name: Create .env file
+      # ── 3. Unit tests (offline, free) ─────────────────────────────────────
+      - name: Run unit tests
+        run: pytest
+
+      # ── 4. Validate required secrets ──────────────────────────────────────
+      #    Secrets are passed through env (never interpolated into the script).
+      - name: Check required secrets
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
         run: |
-          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
-          echo "PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}" >> .env
+          MISSING=0
+          for NAME in OPENAI_API_KEY PINECONE_API_KEY; do
+            if [ -z "${!NAME}" ]; then
+              echo "ERROR: $NAME secret is not configured."
+              MISSING=1
+            else
+              echo "$NAME : configured."
+            fi
+          done
+          if [ "$MISSING" -eq 1 ]; then
+            echo ""
+            echo "Add missing secrets at:"
+            echo "  GitHub repo -> Settings -> Secrets and variables -> Actions"
+            echo "(Pull requests from forks never receive repository secrets.)"
+            exit 1
+          fi
 
-      # ── 6. Ensure results/ directory exists ───────────────────────────────
-      - name: Create results directory
-        run: mkdir -p results
-
-      # ── 7. (Optional) Override TEST_MODE for manual full runs ─────────────
-      - name: Enable full run mode (manual dispatch only)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_run == 'true' }}
-        run: |
-          sed -i 's/^TEST_MODE = True/TEST_MODE = False/' src/run_eval.py
-          echo "TEST_MODE set to False — running full 100-question evaluation."
-
-      # ── 8. Run evaluation ─────────────────────────────────────────────────
+      # ── 5. Run evaluation ─────────────────────────────────────────────────
       #    Exit 0 = all gates PASS → CI green
-      #    Exit 1 = one or more gates FAIL → CI red, deployment blocked
+      #    Exit 1 = gates FAIL, or ERROR (pipeline could not run) → CI red
       - name: Run LLM evaluation pipeline
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          EVAL_FULL_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.full_run == 'true' }}
           PYTHONUNBUFFERED: "1"
         run: python src/run_eval.py
 
-      # ── 9. Upload evaluation report ───────────────────────────────────────
+      # ── 6. Upload evaluation report ───────────────────────────────────────
       #    if: always() ensures artifact is uploaded even when gates fail.
       - name: Upload evaluation report
         if: always()
@@ -129,81 +118,30 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # ── 10. Print gate summary to Actions log ─────────────────────────────
+      # ── 7. Gate summary → Actions log + run summary page ──────────────────
       - name: Print gate summary
         if: always()
-        run: |
-          if [ -f results/latest_report.json ]; then
-            echo "============================================"
-            echo "EVALUATION SUMMARY"
-            echo "============================================"
-            python - <<'EOF'
-          import json
-          with open("results/latest_report.json") as f:
-              r = json.load(f)
-          m = r.get("metrics", {})
-          overall = r.get("overall_result", "UNKNOWN")
+        run: python src/report_summary.py
 
-          # ── Pipeline crash report ──────────────────────────────────
-          if overall == "ERROR":
-              print("  STATUS  : PIPELINE CRASHED (evaluation did not complete)")
-              print(f"  Commit  : {r.get('commit_id')}")
-              print()
-              err = r.get("pipeline_error", "unknown error")
-              print(f"  ERROR   : {err}")
-              print()
-              tb = r.get("traceback", "")
-              if tb:
-                  print("  TRACEBACK:")
-                  for line in tb.splitlines():
-                      print(f"    {line}")
-              print("============================================")
-              print()
-              print("  HINT: Is OPENAI_API_KEY set in repo Secrets?")
-              print("        Settings > Secrets and variables > Actions")
-              print("============================================")
-
-          # ── Normal gate report ─────────────────────────────────────
-          else:
-              print(f"  Questions : {r.get('total_questions')} ({'TEST MODE' if r.get('test_mode') else 'FULL RUN'})")
-              print(f"  Commit    : {r.get('commit_id')}")
-              print(f"  Judge     : gpt-4o-mini")
-              print()
-              print(f"  Hallucination Rate  : {m.get('hallucination_rate', 'N/A')}")
-              print(f"  Answer Relevancy    : {m.get('answer_relevancy', 'N/A')}")
-              print(f"  Faithfulness        : {m.get('faithfulness', 'N/A')}")
-              print(f"  Context Precision   : {m.get('context_precision', 'N/A')}")
-              print(f"  Latency P95         : {m.get('latency_p95_seconds', 'N/A')}s")
-              print(f"  Cost Per Query      : ${m.get('cost_per_query_usd', 0):.4f}")
-              print()
-              failed = r.get("failed_gates", [])
-              print(f"  OVERALL: {overall}")
-              if failed:
-                  print(f"  FAILED : {', '.join(failed)}")
-              else:
-                  print("  All gates passed.")
-              print("============================================")
-          EOF
-          else
-            echo "No report file found."
-            echo "The pipeline crashed before the crash-handler could write a report."
-            echo "Check the 'Run LLM evaluation pipeline' step log above for details."
-          fi
-
-      # ── 11. Commit evaluation results back to the repo ────────────────────
-      #    Saves latest_report.json into the repo on every run (pass or fail).
+      # ── 8. Commit evaluation results back to the repo ─────────────────────
+      #    Only for runs on main/master itself — pull request results must not
+      #    overwrite the dashboard (and a PR checkout has no branch to push to).
       #    [skip ci] in the commit message prevents an infinite CI trigger loop.
-      #    GITHUB_TOKEN is injected automatically — no secret setup needed.
-      #    git diff --staged --quiet exits 0 when nothing changed (no new run),
-      #    so the commit only happens when the file was actually updated.
+      #    The rebase picks up commits pushed while the evaluation was running.
       - name: Commit evaluation results
-        if: always()
+        if: >-
+          always()
+          && github.event_name != 'pull_request'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+          && hashFiles('results/latest_report.json') != ''
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add results/latest_report.json
-          git add results/eval_history.json
-          git diff --staged --quiet || git commit -m "ci: update evaluation results [skip ci]"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          git add results/latest_report.json results/eval_history.json
+          if git diff --staged --quiet; then
+            echo "No result changes to commit."
+            exit 0
+          fi
+          git commit -m "ci: update evaluation results [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
