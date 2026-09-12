@@ -35,6 +35,24 @@
         "faithfulness",
         "context_precision"
       ]
+    },
+    {
+      "run_timestamp": "2026-09-12T20:59:49+00:00",
+      "commit_id": "0c859ab",
+      "total_questions": 10,
+      "test_mode": true,
+      "hallucination_rate": 0.0,
+      "answer_relevancy": 0.9407,
+      "faithfulness": 1.0,
+      "context_precision": 0.9333,
+      "latency_p95_seconds": 1.742,
+      "cost_per_query_usd": 0.004677,
+      "error_rate": 0.0,
+      "total_cost_usd": 0.070148,
+      "total_tokens": 152164,
+      "overall_result": "PASS",
+      "failed_gates": [],
+      "pipeline_error": null
     }
   ]
 }
